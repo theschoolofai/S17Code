@@ -126,3 +126,41 @@ def create_file(workspace: Workspace, ledger: EditLedger, relative: str, *,
     path.write_text(content, encoding="utf-8")
     ledger.record_read(relative)
     return {"path": relative, "bytes": len(content), "created": True}
+
+
+def copy_within_workspace(workspace, ledger, source: str, destination: str,
+                          *, overwrite: bool = False) -> dict:
+    """Duplicate a file inside the workspace without reading it into context.
+
+    This exists because the coding surface had no way to do it, and the gap was
+    invisible until an agent needed it. It had `create_file`, which cannot
+    reproduce 690 KB it has not read, and `run_command`, which correctly refuses
+    `python -c` as an unbounded shell. Four capabilities, each individually
+    right, and no path between them: the agent tried three approaches, was
+    refused three times, and every refusal was correct.
+
+    Copying is not editing. It reads no content into the model, so it is exempt
+    from read-before-edit: there is nothing to have read. It stays inside the
+    workspace and it still refuses to clobber, because silently replacing a file
+    is the thing read-before-edit exists to prevent.
+    """
+    src = workspace.resolve(source)
+    dst = workspace.resolve(destination)
+    if not src.is_file():
+        raise EditError(f"cannot copy {source}: it does not exist")
+    if dst.exists() and not overwrite:
+        raise EditError(
+            f"{destination} already exists. Pass overwrite when you mean to replace it."
+        )
+    if src == dst:
+        raise EditError("source and destination are the same file")
+
+    import shutil
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    size = dst.stat().st_size
+    # The copy is now readable-for-edit: the bytes came from a file the
+    # workspace already trusted, not from anything the model wrote.
+    ledger.read.add(str(destination))
+    return {"copied": True, "source": source, "destination": destination, "bytes": size}

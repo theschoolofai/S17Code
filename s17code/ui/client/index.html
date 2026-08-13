@@ -100,7 +100,7 @@ const RENDERERS = {
   Column:(c,ctx)=>{const e=$("div","Column");kids(c,ctx,e);return e;},
   List:(c,ctx)=>{const e=$("div","List");kids(c,ctx,e);return e;},
   Row:(c,ctx)=>{const e=$("div","Row");if(c.align)e.style.alignItems=ALIGN[c.align]||"center";if(c.justify)e.style.justifyContent=JUSTIFY[c.justify]||"space-between";kids(c,ctx,e);return e;},
-  Card:(c,ctx)=>{const e=$("div","Card");if(c.title){const h=$("div");h.style.cssText="font-weight:600;margin-bottom:8px";h.append(text(c.title));e.append(h);}kids(c,ctx,e);return e;},
+  Card:(c,ctx)=>{const e=$("div","Card");if(c.title){const h=$("div");h.style.cssText="font-weight:600;margin-bottom:8px";h.append(text(resolve(c.title,ctx.dm)));e.append(h);}kids(c,ctx,e);return e;},
   Divider:()=>$("div","Divider"),
   Text:(c,ctx)=>{const e=$("div","Text "+(c.variant||"body"));const v=resolve(c.text,ctx.dm);(c.variant||"body")==="heading"?e.append(text(v)):e.append(md(v));return e;}, // heading = literal; body = safe markdown DOM
   Image:(c)=>{const e=$("img");const src=c.src;if(isSafeUrl(src))e.setAttribute("src",src);e.setAttribute("alt",c.alt==null?"":String(c.alt));e.style.cssText="max-width:100%;border-radius:8px";return e;},
