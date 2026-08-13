@@ -16,6 +16,7 @@ proofs/out/
 
 # Third-party single-file apps: we do not redistribute Bento's player.
 *.bento.html
-# Local run stores and scratch workspaces
-.s17/
-runs/
+# Local run stores and scratch workspaces. Anchored to the repo root so it
+# does not swallow proofs/runs/, which is evidence rather than scratch.
+/.s17/
+/runs/
