@@ -4,6 +4,7 @@ import json
 
 import s17code.routes as agent_route
 import s17code.runtime as runtime_module
+import s17code.workers.general as general_workers
 from s17code.core.memory.embeddings import DeterministicEmbedder
 from s17code.tools import file_uri_to_path
 
@@ -164,7 +165,10 @@ def test_researcher_never_synthesizes_without_readable_evidence(app_client, monk
         return {"query": query, "hits": [], "backend": None, "errors": ["all backends unavailable"]}
 
     monkeypatch.setattr(agent_route, "gateway_text_llm", fake)
-    monkeypatch.setattr(runtime_module, "web_search", empty_search)
+    # run_researcher moved to workers/general.py, so that is where the symbol
+    # it calls now lives. The behaviour under test is unchanged; the patch
+    # target was coupled to which module happened to import the tool.
+    monkeypatch.setattr(general_workers, "web_search", empty_search)
     body = app_client.post("/v1/agent/runs", json={"tenant_id": "t", "project_id": "no-evidence",
         "prompt": "Research a current fact whose sources are unavailable."}).json()
     result = body["graph"]["nodes"]["research"]["result"]
