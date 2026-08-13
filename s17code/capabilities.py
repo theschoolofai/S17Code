@@ -347,6 +347,14 @@ def default_registry() -> CapabilityRegistry:
     role_output = EvidenceProjection(kind="role_output", text="text", external_sources=True)
 
     return CapabilityRegistry([
+        Capability("load_skill",
+                   "Load the full instructions for one skill named in the run's skill listing. "
+                   "Call this BEFORE planning work the skill covers, so its guidance shapes the "
+                   "nodes you add rather than arriving after they have run. Pass 'reference' to "
+                   "fetch one of the extra files the loaded skill names.",
+                   {"name": string("The skill name, exactly as it appears in the skill listing.", maximum=64),
+                    "reference": string("Optional. A reference file named by the skill body, e.g. 'catalog.md'.",
+                                        maximum=128, required=False)}),
         Capability("memory_recall", "Retrieve authorised facts, prior episodes, playbooks, and indexed document chunks relevant to a query.",
                    {"query": string("What must be recalled from durable scoped memory.", maximum=20_000)},
                    families=("evidence",),
@@ -383,6 +391,15 @@ def default_registry() -> CapabilityRegistry:
                     "content": string("Complete text to write.", maximum=60_000),
                     "overwrite": boolean("Whether an existing file may be replaced.", required=False, default=False)},
                    side_effect=True),
+        Capability("copy_code_file",
+                   "Duplicate a file inside the workspace byte for byte, without reading it. "
+                   "Use this to work from a large base file: create_file cannot reproduce what "
+                   "it has not read, and the command runner has no copy program.",
+                   {"source": string("Workspace-relative path of the file to copy.", maximum=2_000),
+                    "destination": string("Workspace-relative path to write.", maximum=2_000),
+                    "overwrite": boolean("Whether an existing destination may be replaced.",
+                                         required=False, default=False)},
+                   side_effect=True, families=("coding",)),
         Capability("copy_file", "Copy one sandbox file byte-for-byte to another sandbox path and verify the source and destination digests. Prefer this over regenerating content when exact preservation is requested.",
                    {"source": string("Existing sandbox-relative source path.", maximum=2_000),
                     "destination": string("Sandbox-relative destination path.", maximum=2_000),
@@ -502,6 +519,12 @@ def default_registry() -> CapabilityRegistry:
                    evidence=EvidenceProjection(kind="patch", text="diff")),
         Capability("git_reset", "Throw away every change in the workspace. This is what rejecting an attempt looks like.",
                    {}, side_effect=True, families=("coding",)),
+
+        Capability("validate_work", "Hand the work to a separate validation agent that starts fresh, is asked to find what is broken rather than confirm it is fine, and cannot edit anything. Use this before claiming a job is done. It returns findings; act on them.",
+                   {"requirement": string("What the work was supposed to achieve, in full. The validator sees this and the files, and nothing else.", maximum=8_000),
+                    "paths": Argument("array", "Files it should examine.", required=False, maximum=20, item_kind="string")},
+                   side_effect=True, families=("coding", "verify", "rerunnable"),
+                   evidence=EvidenceProjection(kind="validation", text="summary")),
 
         Capability("answer_with_evidence", "Produce the final grounded text answer from all completed graph outcomes. Use directly for tasks requiring no tools.",
                    {"query": string("The user's goal, including the requested answer format.", maximum=20_000)},
