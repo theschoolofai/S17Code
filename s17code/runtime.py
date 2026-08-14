@@ -204,6 +204,28 @@ class AgentRuntime:
         assert prompt is not None and scope is not None and source_uri is not None and source_author is not None
         user_source = SourceRef(source_uri, source_author, excerpt=prompt)
 
+        # --- JitRL: restate the request before anything plans against it -----
+        # "the login is broken" costs the planner two or three nodes working out
+        # what was meant, and those nodes stay in the graph forever. The rewrite
+        # is a proposal: it refuses itself if it drops a literal the user gave,
+        # it always carries the original verbatim, and if it fails for any reason
+        # the run proceeds on the untouched prompt. Off by default, because it
+        # costs one model call before any work starts.
+        restated_goal = prompt
+        query_rewrite: dict[str, Any] = {"rewritten": False, "reason": "disabled"}
+        if os.getenv("S17_QUERY_OPTIMIZER", "0").lower() in {"1", "true", "yes"} and not resume:
+            from s17code.reasoning import QueryOptimizer
+
+            async def _optimizer_llm(text: str, system: str) -> str:
+                reply = await llm(text, system)
+                return str(reply.get("text", "")) if isinstance(reply, dict) else str(reply)
+
+            optimized = await QueryOptimizer(_optimizer_llm).optimize(prompt)
+            restated_goal = optimized.planning_goal()
+            query_rewrite = optimized.as_dict()
+            log.info("query optimizer: rewritten=%s %s",
+                     optimized.rewritten, optimized.rejected_because or "")
+
         runtime = self
 
         # --- S15: the budget seam -------------------------------------------
@@ -391,10 +413,10 @@ class AgentRuntime:
         # Seven values, built once. What used to be forty-eight closures.
         ctx = RunContext(run_id=run_id, runtime=runtime, llm=llm, scope=scope,
                          registry=registry, ledger=coding_ledger, transport=transport,
-                         goal=prompt)
+                         goal=restated_goal)
 
         planner: Any = GeneralAgentPlanner(
-            planning_llm, registry, goal=prompt, respond_as=respond_as,
+            planning_llm, registry, goal=restated_goal, respond_as=respond_as,
             allowed_side_effects=set(allowed_side_effects or ()),
             max_nodes=int(os.getenv("S17_MAX_GRAPH_NODES", "32")),
             max_new_tasks=int(os.getenv("S17_MAX_FRONTIER", "4")),
