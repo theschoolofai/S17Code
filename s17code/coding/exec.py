@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from .workspace import Workspace
@@ -50,6 +51,16 @@ SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "\n")
 # only plainly read-only or workspace-local subcommands are permitted.
 GIT_SUBCOMMANDS = ("status", "diff", "log", "show", "add", "commit", "checkout",
                    "restore", "branch", "rev-parse", "stash", "clean")
+
+
+# Windows resolves Winsock and the DLL search path through these rather than
+# through PATH alone. Drop SystemRoot and `import asyncio` raises
+# WinError 10106 before any user code runs, so pytest cannot start and every
+# verification returns a non-zero exit that has nothing to do with the change
+# being verified. Named individually, because the point of building the
+# environment by hand is that the operator's shell does not leak into it.
+WINDOWS_ESSENTIAL_VARS = ("SystemRoot", "SystemDrive", "TEMP", "TMP",
+                          "COMSPEC", "PATHEXT")
 
 
 class CommandError(ValueError):
@@ -117,6 +128,27 @@ def _check(argv: list[str]) -> None:
             raise CommandError("git config and pack overrides can execute programs; refused")
 
 
+def sandbox_env(workspace: Workspace) -> dict[str, str]:
+    """The environment an allowlisted command runs in.
+
+    Built by hand rather than inherited, so a credential in the shell that
+    started the server is not reachable from a command the agent chose. Small,
+    but it still has to be large enough for the interpreter to start.
+    """
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(workspace.root),
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    if sys.platform == "win32":
+        for name in WINDOWS_ESSENTIAL_VARS:
+            value = os.environ.get(name)
+            if value:
+                env[name] = value
+    return env
+
+
 def run_command(workspace: Workspace, command: str | list[str], *,
                 timeout: int = DEFAULT_TIMEOUT) -> CommandResult:
     """Run one allowlisted command inside the workspace, bounded."""
@@ -137,8 +169,7 @@ def run_command(workspace: Workspace, command: str | list[str], *,
         completed = subprocess.run(
             argv, cwd=workspace.root, capture_output=True, text=True,
             timeout=timeout, shell=False,            # never a shell
-            env={"PATH": os.environ.get("PATH", ""), "HOME": str(workspace.root),
-                 "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"},
+            env=sandbox_env(workspace),
         )
         return CommandResult(
             argv, completed.returncode,
