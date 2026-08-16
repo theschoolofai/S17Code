@@ -219,15 +219,20 @@ class GeneralAgentPlanner:
             return None
         tally: dict[str, int] = {}
         for node in graph.nodes.values():
-            if node["state"] != "succeeded":
-                continue
             if node["skill"] not in self.registry.family("verify"):
                 continue
+            # A verification that could not run at all is a failure, not the
+            # absence of one. Counting only `succeeded` nodes meant a command
+            # that raised every time — a bad binary, a worker error, a result
+            # that would not serialise — was invisible here, and the run
+            # repeated it forever. The control exists for exactly that run.
+            if node["state"] not in {"succeeded", "failed"}:
+                continue
             result = node.get("result") or {}
-            if result.get("exit_code") in (0, None):
-                tally.pop(str((node.get("input") or {}).get("command", "")), None)
-                continue          # it passed: whatever went before is forgiven
             command = str((node.get("input") or {}).get("command", ""))
+            if node["state"] == "succeeded" and result.get("exit_code") in (0, None):
+                tally.pop(command, None)
+                continue          # it passed: whatever went before is forgiven
             tally[command] = tally.get(command, 0) + 1
         worst = max(tally.items(), key=lambda kv: kv[1], default=None)
         if worst and worst[1] >= self.max_repeat_failures:
