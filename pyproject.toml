@@ -19,6 +19,12 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27",
     "ddgs>=9,<10",
     "networkx>=3.6,<4",
+    # `zoneinfo` carries no database of its own: it reads the host operating
+    # system's. Windows has never shipped one, and slim and Alpine images
+    # usually drop it, so `current_datetime` fails there on a name that resolves
+    # fine on the Ubuntu runner CI uses. Vendoring the database removes the
+    # difference rather than documenting it.
+    "tzdata",
 ]
 
 [dependency-groups]
