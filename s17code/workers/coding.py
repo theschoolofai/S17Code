@@ -61,8 +61,12 @@ async def grep_code_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
 
 
 async def run_command_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
+    # `.as_dict()` is not cosmetic: the journal stores every node result as JSON,
+    # and a dataclass cannot go in. Returning the CommandResult itself makes the
+    # node fail with a TypeError instead of reporting the exit code the next
+    # attempt is supposed to read.
     return run_command(ctx.workspace(), task.input["command"],
-                       timeout=int(task.input.get("timeout", 120)))
+                       timeout=int(task.input.get("timeout", 120))).as_dict()
 
 
 async def git_diff_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:  # noqa: ARG001
