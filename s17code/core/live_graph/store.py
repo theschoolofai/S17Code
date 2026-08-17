@@ -143,6 +143,16 @@ class GraphStore:
             self._save(state)
             return True
 
+    def exists(self, run_id: str) -> bool:
+        """Whether a run is already stored under this id.
+
+        Lets a caller reject a taken id before doing any work for it, rather
+        than discovering the collision from ``start()``'s return value after
+        the inbound episode has already been written.
+        """
+        with self._lock:
+            return self._path(run_id).exists()
+
     def context(self, run_id: str) -> dict[str, Any]:
         with self._lock:
             return dict(self._load(run_id)["graph"].graph.get("context", {}))

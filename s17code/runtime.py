@@ -120,6 +120,15 @@ def metered(worker: Skill) -> Skill:
 
 
 
+class RunAlreadyExists(ValueError):
+    """A caller chose a run id that is already taken.
+
+    A ValueError so an existing caller's error handling still applies; the HTTP
+    layer distinguishes it to answer 409 rather than 422, because the request
+    was well formed and the id was simply not free.
+    """
+
+
 class AgentRuntime:
     """Owns the persistent stores and runs one user request through the graph."""
 
@@ -179,6 +188,11 @@ class AgentRuntime:
         run behaves exactly as it did before economics existed.
         """
         run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
+        if not resume and self.graph.exists(run_id):
+            # Only reachable for a caller-chosen id. graph.start() already
+            # reports this by returning False, but it does so after the inbound
+            # episode has been written, and nothing was reading the result.
+            raise RunAlreadyExists(f"run {run_id!r} already exists")
         if resume:
             context = self.graph.context(run_id)
             prompt = str(context["prompt"])
@@ -194,13 +208,15 @@ class AgentRuntime:
             inbound = self.memory.write(MemoryRecord(MemoryKind.EPISODE, scope, prompt, [user_source],
                                                       Principal("gateway", "gateway"), metadata={"run_id": run_id}))
             inbound_id = inbound.id
-            self.graph.start(run_id, context={"prompt": prompt, "scope": {"tenant_id": scope.tenant_id,
+            started = self.graph.start(run_id, context={"prompt": prompt, "scope": {"tenant_id": scope.tenant_id,
                                               "project_id": scope.project_id, "user_id": scope.user_id,
                                               "agent_id": scope.agent_id, "run_id": scope.run_id},
                                               "source_uri": source_uri, "source_author": source_author,
                                               "inbound_id": inbound_id, "respond_as": respond_as,
                                               "allowed_side_effects": sorted(allowed_side_effects or ()),
                                               "initial_evidence": initial_evidence or {}})
+            if not started:  # lost a race between the check above and here
+                raise RunAlreadyExists(f"run {run_id!r} already exists")
         assert prompt is not None and scope is not None and source_uri is not None and source_author is not None
         user_source = SourceRef(source_uri, source_author, excerpt=prompt)
 
