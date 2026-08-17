@@ -19,6 +19,9 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27",
     "ddgs>=9,<10",
     "networkx>=3.6,<4",
+    # Windows ships no system IANA database, so zoneinfo resolves nothing but
+    # UTC and current_datetime raises for every real timezone.
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [dependency-groups]
