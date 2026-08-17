@@ -61,8 +61,10 @@ async def grep_code_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
 
 
 async def run_command_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
+    # as_dict, because the node result is checkpointed as JSON: returning the
+    # CommandResult itself kills every command the agent runs.
     return run_command(ctx.workspace(), task.input["command"],
-                       timeout=int(task.input.get("timeout", 120)))
+                       timeout=int(task.input.get("timeout", 120))).as_dict()
 
 
 async def git_diff_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:  # noqa: ARG001
