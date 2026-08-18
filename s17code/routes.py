@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from s17code.auth import require_completion, require_control
 from s17code.core.memory import MemoryKind, MemoryScope, Principal
+from s17code.runtime import RunAlreadyExists
 from s17code.telemetry import export_run
 
 router = APIRouter(prefix="/v1/agent", tags=["live agent"])
@@ -44,6 +45,12 @@ class RunBody(ScopeBody):
     budget: float | None = Field(default=None, gt=0)
     principal: str | None = Field(default=None, max_length=200)
     allowed_side_effects: list[str] = Field(default_factory=list, max_length=20)
+    # This endpoint blocks for the whole run, so the id in its response arrives
+    # after every event has been emitted, and there is no listing route to
+    # discover it from. A caller that wants to watch its own run on
+    # GET /v1/runs/{run_id}/events has to be able to name it up front. Omit it
+    # and the runtime generates one exactly as before.
+    run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class ResumeBody(BaseModel):
@@ -192,7 +199,9 @@ async def run(body: RunBody, request: Request):
                                  source_uri="api://agent/runs", source_author=body.user_id or "api-user",
                                  respond_as=body.respond_as, budget=body.budget, principal=body.principal,
                                  allowed_side_effects=set(body.allowed_side_effects),
-                                 transport=request.app.state.gateway)
+                                 transport=request.app.state.gateway, run_id=body.run_id)
+    except RunAlreadyExists as error:
+        raise HTTPException(409, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:
