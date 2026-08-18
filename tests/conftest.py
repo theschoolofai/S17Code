@@ -16,6 +16,16 @@ def _isolated_state(monkeypatch, tmp_path):
     # rather than disabled for convenience.
     monkeypatch.setenv("S17_CONTROL_TOKEN", CONTROL_TOKEN)
     monkeypatch.setenv("S17_COMPLETION_TOKEN", COMPLETION_TOKEN)
+    # app_client (below) imports s17code.main, whose module-level load_dotenv()
+    # reads the real .env the FIRST time any test triggers that import — and
+    # since that's a real os.environ write, not a monkeypatch, it survives
+    # every fixture teardown afterward and leaks into every later test in the
+    # process. S17_PROTECTED_PATHS is exactly this: this fixture would
+    # otherwise silently narrow the coding guard for every test that runs
+    # after the first one that touches app_client. Clear it explicitly so
+    # every test still sees guard.py's own DEFAULT_PROTECTED unless it opts
+    # into an override itself.
+    monkeypatch.delenv("S17_PROTECTED_PATHS", raising=False)
     (tmp_path / "sandbox").mkdir()
 
 

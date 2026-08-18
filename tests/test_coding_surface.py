@@ -52,6 +52,31 @@ def test_ordinary_source_is_editable(repo) -> None:
     assert is_protected("calc.py") is None
 
 
+def _shipped_protected_paths() -> tuple[str, ...]:
+    """The S17_PROTECTED_PATHS value README's own `cp .env.example .env` setup
+    step ships, parsed exactly as guard.protected_patterns() would parse it."""
+    root = Path(__file__).resolve().parents[1]
+    for line in (root / ".env.example").read_text().splitlines():
+        if line.startswith("S17_PROTECTED_PATHS="):
+            value = line.split("=", 1)[1].strip()
+            return tuple(p.strip() for p in value.split(",") if p.strip())
+    raise AssertionError("S17_PROTECTED_PATHS is not set in .env.example")
+
+
+@pytest.mark.parametrize("path", [
+    "tests/test_calc.py", "test/test_x.py", "conftest.py",
+    "src/tests/test_deep.py", "pyproject.toml", ".github/workflows/ci.yml",
+])
+def test_the_shipped_env_example_protects_the_judge_too(path) -> None:
+    """DEFAULT_PROTECTED is not what ships. S17_PROTECTED_PATHS *replaces* it
+    (guard.protected_patterns(), by design — see .env.example's own comment),
+    so whatever .env.example actually ships is what a fresh `cp .env.example
+    .env` checkout runs with. It must protect everything DEFAULT_PROTECTED
+    protects, or following the README's own setup step silently weakens the
+    one guard that stops an agent from editing the tests that grade it."""
+    assert is_protected(path, _shipped_protected_paths()) is not None
+
+
 # --------------------------------------------------------------- the two preconditions
 
 def test_editing_a_file_this_run_has_not_read_is_refused(repo) -> None:
