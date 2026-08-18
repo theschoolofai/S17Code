@@ -10,8 +10,13 @@ Four bounds, all enforced here rather than requested in a prompt:
 **No shell.** The command is a list of arguments. There is no shell to interpret
 `;`, `&&`, backticks or `rm -rf ~`, because no shell is ever involved.
 
-**An allowlist.** `argv[0]` must be a command we chose. A model that decides the
-fix requires `curl | sh` gets a refusal, not a subprocess.
+**An allowlist.** `argv[0]` must be a bare command name we chose — not a path,
+because the allowlist can name a program but cannot vouch for one the caller
+points at. A model that decides the fix requires `curl | sh` gets a refusal, not
+a subprocess. The list bounds *behaviour*, not spelling, so the flags that hand
+an allowlisted interpreter a program on the command line (`python -c`,
+`node -e`) are refused with it, as is reaching a tool left off the list by
+another route (`python -m pip`, `npm exec`).
 
 **Inside the workspace.** The working directory is the workspace and cannot be
 changed by the caller.
@@ -40,6 +45,23 @@ MAX_TIMEOUT = 600
 
 # Even inside an allowlisted command, these turn a test run into something else.
 FORBIDDEN_ARGS = ("--user", "--system", "-c")
+
+# Flags that hand an allowlisted interpreter a program on the command line.
+# `python -c` was already named here as "an unbounded shell"; `node -e` is the
+# same door in the other allowlisted interpreter, and none of the
+# SHELL_METACHARACTERS need appear in the payload for it to spawn one.
+EVAL_FLAGS = {
+    "python": ("-c",),
+    "python3": ("-c",),
+    "node": ("-e", "--eval", "-p", "--print"),
+}
+
+# `-m` reaches an installer that was deliberately left off the allowlist, and a
+# package's setup.py runs on install.
+FORBIDDEN_MODULES = ("pip", "ensurepip")
+
+# `npm exec`/`npm x` fetch and run a program of the caller's choosing.
+NPM_FORBIDDEN = ("exec", "x")
 
 # Characters that only mean anything to a shell. We never invoke one, so their
 # presence means the caller believed it had a shell. Refuse loudly rather than
@@ -93,16 +115,41 @@ def _check(argv: list[str]) -> None:
                     f"{meta!r} has no meaning here: commands run without a shell. "
                     "Run one program per call."
                 )
-    program = os.path.basename(argv[0])
+    # The allowlist used to be checked against the basename while argv[0] itself
+    # was executed, so any path ending in an allowlisted name ran from wherever
+    # the caller pointed. A program is looked up on PATH or it is refused.
+    if "/" in argv[0] or "\\" in argv[0]:
+        raise CommandError(
+            f"{argv[0]!r} must be a bare command name, not a path. "
+            "The allowlist names programs; it cannot vouch for one you point at."
+        )
+    program = argv[0]
     if program not in allowlist():
         raise CommandError(
             f"{program!r} is not an allowed command. Allowed: {', '.join(allowlist())}. "
             "The agent runs the tests; it does not get a shell."
         )
+    for flag in EVAL_FLAGS.get(program, ()):
+        if flag in argv[1:]:
+            raise CommandError(
+                f"{program} {flag} is refused: it is an unbounded shell. "
+                "Write the code to a file and run the file."
+            )
+    if program.startswith("python") and "-m" in argv[1:]:
+        index = argv.index("-m")
+        module = argv[index + 1] if index + 1 < len(argv) else ""
+        if module.split(".")[0] in FORBIDDEN_MODULES:
+            raise CommandError(
+                f"python -m {module} is refused: pip is not an allowed command, "
+                "and -m does not make it one."
+            )
+    if program == "npm":
+        subcommand = next((a for a in argv[1:] if not a.startswith("-")), "")
+        if subcommand in NPM_FORBIDDEN:
+            raise CommandError(
+                f"npm {subcommand} runs arbitrary programs of the caller's choosing; refused."
+            )
     for argument in argv[1:]:
-        # `python -c "..."` is a shell by another name.
-        if program.startswith("python") and argument == "-c":
-            raise CommandError("python -c is refused: it is an unbounded shell")
         if argument in FORBIDDEN_ARGS and program in {"pip", "uv"}:
             raise CommandError(f"{argument!r} is refused for {program}")
     if program == "git":
