@@ -4,9 +4,10 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
-import httpx
-
 import conftest
+import httpx
+import pytest
+
 import s17code.routes as agent_route
 from s17code.core.live_graph import Deferred, GraphPatch, TaskSpec
 from s17code.core.memory.embeddings import DeterministicEmbedder
@@ -265,3 +266,46 @@ def test_general_planner_can_discover_and_use_a_future_channel_adapter(app_clien
         channel="future_adapter", recipient_id="destination", text="The build passed.",
         thread_id=None, voice_audio_ref=None,
     )
+
+
+async def test_send_channel_refuses_when_bridge_token_is_missing(monkeypatch):
+    requests = []
+
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path, request.headers.get("authorization")))
+        return httpx.Response(200, json={"accepted": True})
+
+    monkeypatch.delenv("S17_CHANNEL_BRIDGE_TOKEN", raising=False)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(gateway), base_url="http://glc")
+    client = GatewayClient("http://glc", client=http)
+    with pytest.raises(RuntimeError, match="S17_CHANNEL_BRIDGE_TOKEN"):
+        await client.send_channel(channel="gmail", recipient_id="owner@example.com", text="hello")
+    assert requests == []
+    await http.aclose()
+
+
+async def test_send_channel_explains_invalid_bridge_token(monkeypatch):
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "invalid channel bridge token"})
+
+    monkeypatch.setenv("S17_CHANNEL_BRIDGE_TOKEN", "wrong")
+    http = httpx.AsyncClient(transport=httpx.MockTransport(gateway), base_url="http://glc")
+    client = GatewayClient("http://glc", client=http)
+    with pytest.raises(RuntimeError, match="GLC_S17_BRIDGE_TOKEN"):
+        await client.send_channel(channel="gmail", recipient_id="owner@example.com", text="hello")
+    await http.aclose()
+
+
+async def test_send_channel_explains_missing_gmail_token(monkeypatch):
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            json={"detail": "channel send failed: FileNotFoundError: token.json"},
+        )
+
+    monkeypatch.setenv("S17_CHANNEL_BRIDGE_TOKEN", "shared")
+    http = httpx.AsyncClient(transport=httpx.MockTransport(gateway), base_url="http://glc")
+    client = GatewayClient("http://glc", client=http)
+    with pytest.raises(RuntimeError, match="gmail.auth_setup"):
+        await client.send_channel(channel="gmail", recipient_id="owner@example.com", text="hello")
+    await http.aclose()
