@@ -61,8 +61,11 @@ async def grep_code_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
 
 
 async def run_command_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
+    # .as_dict(), not the CommandResult: the runtime stores this as the node's
+    # result and streams it as JSON, and a dataclass fails at that boundary
+    # after the command has already run.
     return run_command(ctx.workspace(), task.input["command"],
-                       timeout=int(task.input.get("timeout", 120)))
+                       timeout=int(task.input.get("timeout", 120))).as_dict()
 
 
 async def git_diff_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:  # noqa: ARG001
