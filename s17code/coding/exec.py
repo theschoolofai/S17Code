@@ -76,6 +76,27 @@ class CommandResult:
                 "stdout": self.stdout, "stderr": self.stderr}
 
 
+def split_command(command: str | list[str]) -> list[str]:
+    """Split a command string into argv without eating Windows path separators.
+
+    `shlex.split` defaults to POSIX mode, where the backslash is an escape
+    character. `pytest tests\test_calc.py` came out as `teststest_calc.py`: not
+    a refusal, a different path, and the agent then reads "no such file" about
+    something it never typed.
+
+    Non-POSIX mode keeps backslashes but leaves quotes attached to the token, so
+    the surrounding pair is stripped afterwards. A list is copied and returned as
+    given — the caller has already done the splitting.
+    """
+    if not isinstance(command, str):
+        return list(command)
+    tokens = shlex.split(command, posix=False)
+    return [
+        token[1:-1] if len(token) > 1 and token[0] == token[-1] and token[0] in "\"'" else token
+        for token in tokens
+    ]
+
+
 def allowlist() -> tuple[str, ...]:
     configured = os.getenv("S17_ALLOWED_COMMANDS", "").strip()
     if configured:
@@ -120,7 +141,7 @@ def _check(argv: list[str]) -> None:
 def run_command(workspace: Workspace, command: str | list[str], *,
                 timeout: int = DEFAULT_TIMEOUT) -> CommandResult:
     """Run one allowlisted command inside the workspace, bounded."""
-    argv = shlex.split(command) if isinstance(command, str) else list(command)
+    argv = split_command(command)
     _check(argv)
     timeout = max(1, min(int(timeout), MAX_TIMEOUT))
 
