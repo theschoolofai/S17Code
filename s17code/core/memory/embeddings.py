@@ -13,6 +13,15 @@ class Embedder(Protocol):
     def embed(self, text: str) -> list[float]: ...
 
 
+class EmbeddingUnavailable(RuntimeError):
+    """No embedding could be obtained, on either endpoint.
+
+    Distinct from an older Ollama install, which the endpoint fallback handles
+    silently. This says the service is unreachable or rejected the model, and it
+    carries both endpoint errors so whichever one explains the cause survives.
+    """
+
+
 class OllamaNomicEmbedder:
     """Small dependency-free client for a locally running Ollama instance."""
     def __init__(self, model: str = "nomic-embed-text", base_url: str = "http://localhost:11434"):
@@ -41,11 +50,23 @@ class OllamaNomicEmbedder:
             with urlopen(request, timeout=30) as response:  # nosec B310: local configurable service
                 data = json.load(response)
             return list(data["embeddings"][0])
-        except Exception:
+        except Exception as modern_failure:
             old_body = json.dumps({"model": self.model, "prompt": text}).encode()
             old = Request(self.base_url + "/api/embeddings", data=old_body, headers={"Content-Type": "application/json"})
-            with urlopen(old, timeout=30) as response:  # nosec B310: local configurable service
-                return list(json.load(response)["embedding"])
+            try:
+                with urlopen(old, timeout=30) as response:  # nosec B310: local configurable service
+                    return list(json.load(response)["embedding"])
+            except Exception as legacy_failure:
+                # Both endpoints are gone, so this is not a version difference.
+                # Name the service and the model: when Ollama is up but the model
+                # is not pulled, `modern_failure` is the error that says so, and a
+                # bare `except` here used to discard it.
+                raise EmbeddingUnavailable(
+                    f"no embedding from Ollama at {self.base_url} for model {self.model!r}: "
+                    f"/api/embed failed ({type(modern_failure).__name__}: {modern_failure}); "
+                    f"/api/embeddings failed ({type(legacy_failure).__name__}: {legacy_failure}). "
+                    f"Start Ollama and `ollama pull {self.model}`, or configure a different embedder."
+                ) from legacy_failure
 
     def release(self) -> None:
         """Unload the embedding model before a larger answer model runs.
