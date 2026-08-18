@@ -15,7 +15,11 @@ from google.protobuf.timestamp_pb2 import Timestamp
 
 from s17code.core.live_graph import GraphPatch, NodeState
 
-from .server import A2ADemoServer, TaskState
+from .server import TERMINAL, A2ADemoServer, TaskState
+
+# The wire spellings of TERMINAL. A subscription that ends on anything else has
+# not told us the task finished, only that the stream stopped.
+TERMINAL_WIRE = frozenset({p.TASK_STATE_COMPLETED, p.TASK_STATE_FAILED, p.TASK_STATE_CANCELED})
 
 
 def _task(task) -> p.Task:
@@ -79,9 +83,16 @@ class OfficialA2AServicer(pb_grpc.A2AServiceServicer):
         await self._auth(context)
         task=self.core.tasks.get(request.id)
         if not task: await context.abort(grpc.StatusCode.NOT_FOUND,"task not found")
-        yield p.StreamResponse(task=_task(task))
-        while task.state not in {TaskState.COMPLETED,TaskState.FAILED,TaskState.CANCELED}:
-            await asyncio.sleep(.02); yield p.StreamResponse(task=_task(task))
+        # Decide on the snapshot that was actually sent. Re-reading task.state
+        # after the yield ended the stream on a non-terminal event whenever the
+        # task completed in that gap, and a subscriber cannot tell that apart
+        # from a remote that simply stopped talking.
+        while True:
+            state = task.state
+            yield p.StreamResponse(task=_task(task))
+            if state in TERMINAL:
+                return
+            await asyncio.sleep(.02)
     async def CreateTaskPushNotificationConfig(self, request, context): await self._auth(context); return self.pushes.put(request)
     async def GetTaskPushNotificationConfig(self, request, context):
         await self._auth(context)
@@ -101,11 +112,32 @@ class GraphA2ARemote:
     """The only surface a live graph needs: start, wait/resume, cancel."""
     def __init__(self, stub): self.stub=stub
     async def start(self, request: p.SendMessageRequest) -> p.Task: return (await self.stub.SendMessage(request)).task
-    async def wait(self, task_id: str) -> p.Task:
-        final=None
+    async def wait(self, task_id: str, *, max_events: int = 10_000) -> p.Task:
+        """Block until the remote task reaches a terminal state.
+
+        A stream that ends is not a task that finished. Keeping the last event
+        seen and returning it meant a stalled or non-conforming peer resumed the
+        waiting graph node and wrote an `a2a_task_completed` journal entry
+        carrying `state: working` — a run continuing on work nobody observed
+        finish. This is an interoperability surface, so the peer is not assumed
+        to be well behaved.
+        """
+        final=None; seen=0
         async for event in self.stub.SubscribeToTask(p.SubscribeToTaskRequest(id=task_id)):
-            final=event.task
-        return final
+            final=event.task; seen+=1
+            if final.status.state in TERMINAL_WIRE:
+                return final
+            if seen >= max_events:
+                raise RuntimeError(
+                    f"subscription to {task_id} sent {seen} events without reaching a "
+                    f"terminal state; last was {final.status.state}"
+                )
+        if final is None:
+            raise RuntimeError(f"subscription to {task_id} ended without sending any event")
+        raise RuntimeError(
+            f"subscription to {task_id} ended without reaching a terminal state; "
+            f"last was {final.status.state}"
+        )
     async def cancel(self, task_id: str) -> p.Task: return await self.stub.CancelTask(p.CancelTaskRequest(id=task_id))
 
 
