@@ -119,7 +119,26 @@ class GatewayClient:
 
     def _channel_headers(self) -> dict[str, str]:
         token = os.getenv("S17_CHANNEL_BRIDGE_TOKEN", "").strip()
-        return {"Authorization": f"Bearer {token}"} if token else {}
+        if not token:
+            raise RuntimeError(
+                "S17_CHANNEL_BRIDGE_TOKEN is unset; GLC will reject the send"
+            )
+        return {"Authorization": f"Bearer {token}"}
+
+    def _channel_send_error(self, status_code: int, body: str) -> RuntimeError:
+        message = f"gateway channel send returned {status_code}: {body[:500]}"
+        lower = body.lower()
+        if status_code == 401 and "invalid channel bridge token" in lower:
+            message += (
+                " Set S17_CHANNEL_BRIDGE_TOKEN to the same value as "
+                "GLC_S17_BRIDGE_TOKEN (legacy alias GLC_S16_BRIDGE_TOKEN)."
+            )
+        elif "token.json" in lower:
+            message += (
+                " Gmail is not authorized. Run "
+                "python -m glc.channels.catalogue.gmail.auth_setup"
+            )
+        return RuntimeError(message)
 
     async def channels(self) -> list[dict[str, Any]]:
         """Discover the gateway catalogue; S17 carries no channel-name list."""
@@ -155,9 +174,7 @@ class GatewayClient:
             headers=self._channel_headers(),
         )
         if response.status_code >= 400:
-            raise RuntimeError(
-                f"gateway channel send returned {response.status_code}: {response.text[:500]}"
-            )
+            raise self._channel_send_error(response.status_code, response.text)
         body = response.json()
         if not isinstance(body, dict):
             raise RuntimeError("gateway returned an invalid channel receipt")
