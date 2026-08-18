@@ -51,13 +51,27 @@ OPTIMIZER_SYSTEM = (
 
 _JSON = re.compile(r"\{.*\}", re.S)
 # Literals a rewrite is not allowed to quietly drop.
+#
+# Paths are recognised by shape, not by an extension allowlist. The list used to
+# be Python and the web, so `src/auth/server.rs` was not seen as a path at all
+# and the rewrite could drop the only pointer to where to look. URLs were caught
+# only when they happened to end in a listed extension.
+#
+# Over-matching is not free either — every false literal is a refused rewrite —
+# so a token needs an extension or a trailing separator to count. That keeps
+# ordinary prose ("and/or", "e.g.") out, which is why one-letter extensions are
+# an explicit short set rather than any single character.
 _LITERALS = re.compile(
     r"""(?:
-        "[^"]{1,120}" | '[^']{1,120}'          # quoted strings
-      | \b[\w./-]+\.(?:py|js|ts|tsx|jsx|html|css|json|toml|yaml|yml|md|sql)\b   # file paths
-      | \b[a-f0-9]{7,40}\b                      # sha-ish
-      | \bv?\d+\.\d+(?:\.\d+)?\b                # versions
-      | \#\d+                                    # issue numbers
+        "[^"]{1,120}" | '[^']{1,120}'                                       # quoted strings
+      | \bhttps?://[^\s<>"')\]]+                                             # URLs
+      | \b[\w-]+(?:[/\\][\w-]+)*[/\\][\w-]+\.[A-Za-z][A-Za-z0-9]{1,7}\b     # dir/.../name.ext
+      | \b[\w-]+(?:[/\\][\w-]+)*\.[chmsS]\b                                  # .c .h .m .s
+      | \b[\w-]+(?:[/\\][\w-]+)+[/\\]                                        # a directory named
+      | \b[\w-]+\.[A-Za-z][A-Za-z0-9]{1,7}\b                                 # bare name.ext
+      | \b[a-f0-9]{7,40}\b                                                    # sha-ish
+      | \bv?\d+\.\d+(?:\.\d+)?\b                                              # versions
+      | \#\d+                                                                  # issue numbers
     )""",
     re.X,
 )
