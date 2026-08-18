@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from s17code.coding.edit import EditError, EditLedger, copy_within_workspace
+from s17code.coding.guard import GuardError
 from s17code.coding.workspace import Workspace
 
 
@@ -61,3 +62,29 @@ def test_neither_end_may_leave_the_workspace(ws, escape: str) -> None:
         copy_within_workspace(workspace, ledger, "base.html", escape)
     with pytest.raises(Exception):
         copy_within_workspace(workspace, ledger, escape, "deck.html")
+
+
+def test_copying_over_the_judge_is_refused(ws) -> None:
+    """Copy is a write. The guard does not care which capability held the pen.
+
+    ``create_file`` refuses ``tests/**`` and ``edit_code`` refuses it too. If
+    ``copy_code_file`` does not, the agent has a way to replace a failing test
+    with a passing one, which is the first shortcut the guard exists to close.
+    """
+    workspace, ledger = ws
+    (workspace.root / "tests").mkdir()
+    (workspace.root / "tests" / "test_calc.py").write_text("def test_average_of_nothing():\n    assert average([]) == 0\n")
+    (workspace.root / "green.py").write_text("def test_average_of_nothing():\n    assert True\n")
+
+    with pytest.raises(GuardError, match="protected pattern"):
+        copy_within_workspace(workspace, ledger, "green.py", "tests/test_calc.py", overwrite=True)
+
+    assert "assert average" in (workspace.root / "tests" / "test_calc.py").read_text()
+
+
+@pytest.mark.parametrize("judge", ["conftest.py", "pyproject.toml", ".github/workflows/ci.yml"])
+def test_no_protected_path_is_reachable_by_copy(ws, judge: str) -> None:
+    """The guard is a property of the destination, not of one capability."""
+    workspace, ledger = ws
+    with pytest.raises(GuardError):
+        copy_within_workspace(workspace, ledger, "base.html", judge)
