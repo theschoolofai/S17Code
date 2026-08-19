@@ -454,7 +454,7 @@ class AgentRuntime:
             "list_channels": partial(general.list_channels, ctx), "send_channel_message": partial(general.send_channel_message, ctx),
             "launch_job": partial(general.launch_job, ctx),
             "request_approval": partial(general.request_approval, ctx),
-            "answer_with_evidence": answer, "researcher": partial(general.run_researcher, ctx), "retriever": partial(general.run_retriever, ctx),
+            "answer_with_evidence": answer, "researcher": partial(general.run_researcher, ctx), "retriever": partial(general.run_retriever, ctx, inbound_id=inbound_id),
             "content": partial(general.run_content, ctx), "compose_surface": partial(ui_compose.compose_surface, ctx, surface_llm=surface_llm),
             "read_code": partial(coding_workers.read_code_worker, ctx), "edit_code": partial(coding_workers.edit_code_worker, ctx),
             "create_file": partial(coding_workers.create_file_worker, ctx), "glob_files": partial(coding_workers.glob_files_worker, ctx),
