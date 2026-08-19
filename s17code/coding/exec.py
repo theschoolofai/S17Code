@@ -48,8 +48,14 @@ SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "\n")
 
 # `git` can execute arbitrary programs through several flags and config keys, so
 # only plainly read-only or workspace-local subcommands are permitted.
+#
+# `clean` and `stash` are intentionally absent. Both are irreversible:
+# `git clean` permanently deletes untracked files (no recovery via `git reset`),
+# and `git stash drop/clear` destroys saved work. The session rule is that
+# everything the agent may run is local and reversible; a bad commit can be
+# reset, but a cleaned or dropped stash cannot be recovered.
 GIT_SUBCOMMANDS = ("status", "diff", "log", "show", "add", "commit", "checkout",
-                   "restore", "branch", "rev-parse", "stash", "clean")
+                   "restore", "branch", "rev-parse")
 
 
 class CommandError(ValueError):
