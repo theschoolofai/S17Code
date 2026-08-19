@@ -53,10 +53,20 @@ async def run_validate_work(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
         )
     finally:
         os.environ.pop("_S17_VALIDATION_DEPTH", None)
+	# 🟢 FIX: Add notebook isolation filter
+	# Only return results from the requested notebook
+	if "notebook_id" in child:
+	    filtered_docs = [doc for doc in child.get("documents", []) if doc.get("notebook_id") == child.get("notebook_id")]
+	 child["documents"] = filtered_docs
+	answer = (child.get("answer") or "").strip()
+	# 🟢 FIX: Add notebook isolation filter
+	
+	if "notebook_id" in child:
+	    filtered_docs = [doc for doc in child.get("documents", []) if doc.get("notebook_id") == child.get("notebook_id")]
+	    child["documents"] = filtered_docs
+	parsed = _parse_json_object(answer) or {}
 
-    answer = (child.get("answer") or "").strip()
-    parsed = _parse_json_object(answer) or {}
-    report = summarise(parsed) if parsed else {
+    	report = summarise(parsed) if parsed else {
         "passed": False, "findings": [], "summary": answer[:2_000],
         "blockers": 0, "reproduced_any": False,
     }
