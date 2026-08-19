@@ -1,14 +1,18 @@
 """Local agent-runtime endpoints."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from s17code.auth import require_completion, require_control
@@ -16,6 +20,7 @@ from s17code.core.memory import MemoryKind, MemoryScope, Principal
 from s17code.telemetry import export_run
 
 router = APIRouter(prefix="/v1/agent", tags=["live agent"])
+_log = logging.getLogger(__name__)
 
 
 async def gateway_text_llm(app, prompt: str, system: str):
@@ -44,6 +49,9 @@ class RunBody(ScopeBody):
     budget: float | None = Field(default=None, gt=0)
     principal: str | None = Field(default=None, max_length=200)
     allowed_side_effects: list[str] = Field(default_factory=list, max_length=20)
+    # When false, return run_id immediately so /v1/runs/{id}/events and /s/{id}
+    # can observe an in-flight run. Default true preserves sync clients.
+    wait: bool = True
 
 
 class ResumeBody(BaseModel):
@@ -186,13 +194,49 @@ async def _resume_channel_approval(request: Request, body: ChannelMessageBody):
 @router.post("/runs", dependencies=[Depends(require_control)])
 async def run(body: RunBody, request: Request):
     runtime = request.app.state.runtime
+
+    async def _execute(run_id: str | None = None):
+        return await runtime.run(
+            prompt=body.prompt,
+            scope=body.scope(),
+            llm=lambda prompt, system: gateway_text_llm(request.app, prompt, system),
+            source_uri="api://agent/runs",
+            source_author=body.user_id or "api-user",
+            respond_as=body.respond_as,
+            budget=body.budget,
+            principal=body.principal,
+            allowed_side_effects=set(body.allowed_side_effects),
+            transport=request.app.state.gateway,
+            run_id=run_id,
+        )
+
     try:
-        return await runtime.run(prompt=body.prompt, scope=body.scope(),
-                                 llm=lambda prompt, system: gateway_text_llm(request.app, prompt, system),
-                                 source_uri="api://agent/runs", source_author=body.user_id or "api-user",
-                                 respond_as=body.respond_as, budget=body.budget, principal=body.principal,
-                                 allowed_side_effects=set(body.allowed_side_effects),
-                                 transport=request.app.state.gateway)
+        if body.wait:
+            return await _execute()
+
+        # Async start: UI clients need run_id before the graph finishes so they
+        # can subscribe to /v1/runs/{id}/events while work is still happening.
+        run_id = f"run-{uuid.uuid4().hex[:12]}"
+
+        async def _background() -> None:
+            try:
+                await _execute(run_id)
+            except Exception:  # noqa: BLE001 — surfaced via journal/finished state
+                _log.exception("async run %s failed", run_id)
+
+        asyncio.create_task(_background())
+        # Let the task reach graph.start (sync) before the first LLM await.
+        for _ in range(100):
+            await asyncio.sleep(0)
+            try:
+                runtime.graph.snapshot(run_id)
+                break
+            except KeyError:
+                continue
+        return JSONResponse(
+            {"run_id": run_id, "status": "running", "finished": False},
+            status_code=202,
+        )
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:

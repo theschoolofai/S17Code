@@ -143,6 +143,15 @@ class GraphStore:
             self._save(state)
             return True
 
+    def patch_context(self, run_id: str, **fields: Any) -> None:
+        """Merge fields into the run context without resetting the graph."""
+        with self._lock:
+            state = self._load(run_id)
+            ctx = dict(state["graph"].graph.get("context", {}))
+            ctx.update(fields)
+            state["graph"].graph["context"] = ctx
+            self._save(state)
+
     def context(self, run_id: str) -> dict[str, Any]:
         with self._lock:
             return dict(self._load(run_id)["graph"].graph.get("context", {}))
