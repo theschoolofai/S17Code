@@ -191,16 +191,19 @@ class AgentRuntime:
             if prompt is None or scope is None or source_uri is None or source_author is None:
                 raise ValueError("new runs require prompt, scope, and source identity")
             user_source = SourceRef(source_uri, source_author, excerpt=prompt)
-            inbound = self.memory.write(MemoryRecord(MemoryKind.EPISODE, scope, prompt, [user_source],
-                                                      Principal("gateway", "gateway"), metadata={"run_id": run_id}))
-            inbound_id = inbound.id
+            # Register the run in the journal BEFORE any I/O (embeddings, LLM)
+            # so wait=false clients can subscribe to /v1/runs/{id} immediately.
             self.graph.start(run_id, context={"prompt": prompt, "scope": {"tenant_id": scope.tenant_id,
                                               "project_id": scope.project_id, "user_id": scope.user_id,
                                               "agent_id": scope.agent_id, "run_id": scope.run_id},
                                               "source_uri": source_uri, "source_author": source_author,
-                                              "inbound_id": inbound_id, "respond_as": respond_as,
+                                              "inbound_id": None, "respond_as": respond_as,
                                               "allowed_side_effects": sorted(allowed_side_effects or ()),
                                               "initial_evidence": initial_evidence or {}})
+            inbound = self.memory.write(MemoryRecord(MemoryKind.EPISODE, scope, prompt, [user_source],
+                                                      Principal("gateway", "gateway"), metadata={"run_id": run_id}))
+            inbound_id = inbound.id
+            self.graph.patch_context(run_id, inbound_id=inbound_id)
         assert prompt is not None and scope is not None and source_uri is not None and source_author is not None
         user_source = SourceRef(source_uri, source_author, excerpt=prompt)
 
