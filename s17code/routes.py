@@ -44,6 +44,9 @@ class RunBody(ScopeBody):
     budget: float | None = Field(default=None, gt=0)
     principal: str | None = Field(default=None, max_length=200)
     allowed_side_effects: list[str] = Field(default_factory=list, max_length=20)
+    # Optional client-supplied id so a UI can open the SSE stream before POST returns.
+    # Omit it and the runtime generates one, exactly as before.
+    run_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
 
 
 class ResumeBody(BaseModel):
@@ -192,7 +195,8 @@ async def run(body: RunBody, request: Request):
                                  source_uri="api://agent/runs", source_author=body.user_id or "api-user",
                                  respond_as=body.respond_as, budget=body.budget, principal=body.principal,
                                  allowed_side_effects=set(body.allowed_side_effects),
-                                 transport=request.app.state.gateway)
+                                 transport=request.app.state.gateway,
+                                 run_id=body.run_id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:
