@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
@@ -128,6 +129,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="S17Code — Live Graph, Memory, Semantic Chunking and A2A", lifespan=lifespan)
+# Browser frontends (Agent Observatory, file://, localhost static servers) need
+# CORS. Credentials are not used; the control token travels in Authorization.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(routes.router)
 app.include_router(a2a_routes.router)
 app.include_router(ui_router)

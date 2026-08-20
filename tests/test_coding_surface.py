@@ -124,6 +124,26 @@ def test_only_allowed_bounded_commands_run(repo, command) -> None:
         run_command(repo, command, timeout=5)
 
 
+@pytest.mark.parametrize("cmd", [
+    ["git", "clean", "-fd"],
+    ["git", "clean", "-fdx"],
+    ["git", "stash", "drop"],
+    ["git", "stash", "clear"],
+])
+def test_destructive_git_subcommands_are_refused(repo, cmd) -> None:
+    """git clean and git stash drop/clear are irreversible: they delete files or
+    stash entries that cannot be recovered with git reset. The session rule is
+    'everything allowed is local and reversible'; these two break that rule.
+
+    An agent could exploit git clean to remove untracked evidence files it just
+    produced (e.g. a generated index.html), or to erase work a human has not
+    yet committed. git stash drop/clear silently destroys saved work with no
+    recovery path. Neither belongs in an allowlist whose only purpose is to
+    run tests and inspect diffs."""
+    with pytest.raises(CommandError):
+        run_command(repo, cmd, timeout=5)
+
+
 def test_python_dash_c_is_a_shell_by_another_name(repo) -> None:
     # This particular payload is caught even earlier, by the metacharacter check,
     # because it contains ";". Both refusals are correct; assert on the refusal.
