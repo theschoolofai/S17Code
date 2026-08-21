@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cyberpunk Audio Equalizer</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #05050a; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.18"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+</head>
+<body>
+<script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(10, 10, 10);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    const composer = new THREE.EffectComposer(renderer);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    const bloom = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    composer.addPass(bloom);
+
+    const config = { speed: 2, freq: 1, color: '#00ffff' };
+    const gui = new lil.GUI();
+    gui.add(config, 'speed', 0, 5);
+    gui.add(config, 'freq', 0.1, 5);
+    gui.addColor(config, 'color').onChange(val => bars.forEach(b => b.material.color.set(val)));
+
+    const bars = [];
+    const group = new THREE.Group();
+    for(let i=0; i<10; i++) {
+        for(let j=0; j<10; j++) {
+            const geo = new THREE.BoxGeometry(0.8, 1, 0.8);
+            const mat = new THREE.MeshStandardMaterial({ color: config.color, emissive: config.color, emissiveIntensity: 0.5 });
+            const bar = new THREE.Mesh(geo, mat);
+            bar.position.set(i - 4.5, 0, j - 4.5);
+            group.add(bar);
+            bars.push({ mesh: bar, x: i, z: j });
+        }
+    }
+    scene.add(group);
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1 }));
+    floor.rotation.x = -Math.PI/2;
+    floor.position.y = -0.5;
+    scene.add(floor);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(5, 10, 5);
+    scene.add(light);
+
+    function animate(time) {
+        requestAnimationFrame(animate);
+        bars.forEach((b, idx) => {
+            const h = Math.sin(time * 0.002 * config.speed + b.x * config.freq + b.z * config.freq) * 2 + 2;
+            b.mesh.scale.y = h;
+            b.mesh.position.y = h / 2 - 0.5;
+        });
+        composer.render();
+    }
+    animate(0);
+</script>
+</body>
+</html>

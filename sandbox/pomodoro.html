@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cyberpunk Pomodoro</title>
+    <style>
+        :root { --neon: #0ff; --bg: #0a0a0a; }
+        body { background: var(--bg); color: var(--neon); font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .timer-container { position: relative; width: 200px; height: 200px; margin: 20px; }
+        #progress-ring { transform: rotate(-90deg); transition: stroke-dashoffset 0.5s linear; }
+        #timer { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 2.5rem; text-shadow: 0 0 10px var(--neon); }
+        .controls button { background: transparent; border: 1px solid var(--neon); color: var(--neon); padding: 10px 20px; cursor: pointer; margin: 5px; }
+        .controls button:hover { background: var(--neon); color: var(--bg); }
+        .task-list { width: 100%; max-width: 400px; margin-top: 20px; border: 1px solid var(--neon); padding: 15px; }
+        .completed { text-decoration: line-through; opacity: 0.5; }
+        li { list-style: none; margin: 5px 0; display: flex; justify-content: space-between; }
+    </style>
+</head>
+<body>
+    <div class="timer-container">
+        <svg width="200" height="200"><circle id="progress-ring" cx="100" cy="100" r="90" fill="none" stroke="var(--neon)" stroke-width="10" stroke-dasharray="565.48" stroke-dashoffset="0" /></svg>
+        <div id="timer">25:00</div>
+    </div>
+    <div class="controls">
+        <button onclick="startTimer()">Start</button>
+        <button onclick="pauseTimer()">Pause</button>
+        <button onclick="resetTimer()">Reset</button>
+    </div>
+    <div class="task-list">
+        <input type="text" id="taskInput" placeholder="New task..." style="background:transparent; color:white; border:1px solid var(--neon);">
+        <button onclick="addTask()">Add</button>
+        <ul id="tasks"></ul>
+        <div id="count">Completed: 0</div>
+    </div>
+    <script>
+        let timeLeft = 1500, timerId = null;
+        const ring = document.getElementById('progress-ring');
+        function updateDisplay() {
+            const m = Math.floor(timeLeft / 60), s = timeLeft % 60;
+            document.getElementById('timer').innerText = `${m}:${s.toString().padStart(2, '0')}`;
+            ring.style.strokeDashoffset = 565.48 * (1 - timeLeft / 1500);
+        }
+        function startTimer() { if(!timerId) timerId = setInterval(() => { timeLeft--; updateDisplay(); if(timeLeft <= 0) clearInterval(timerId); }, 1000); }
+        function pauseTimer() { clearInterval(timerId); timerId = null; }
+        function resetTimer() { pauseTimer(); timeLeft = 1500; updateDisplay(); }
+        function addTask() {
+            const input = document.getElementById('taskInput');
+            if(!input.value) return;
+            const li = document.createElement('li');
+            li.innerHTML = `<span onclick="this.classList.toggle('completed'); updateCount()">${input.value}</span> <button onclick="this.parentElement.remove(); updateCount()">x</button>`;
+            document.getElementById('tasks').appendChild(li);
+            input.value = '';
+            updateCount();
+        }
+        function updateCount() { document.getElementById('count').innerText = `Completed: ${document.querySelectorAll('.completed').length}`; }
+    </script>
+</body>
+</html>

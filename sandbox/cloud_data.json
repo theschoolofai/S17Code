@@ -1,0 +1,7 @@
+{
+  "providers": [
+    {"name": "AWS", "regions": 33, "renewable_pct": 100, "cost_index": 85, "initiative": "Climate Pledge"},
+    {"name": "GCP", "regions": 40, "renewable_pct": 100, "cost_index": 75, "initiative": "Carbon-free energy"},
+    {"name": "Azure", "regions": 60, "renewable_pct": 100, "cost_index": 80, "initiative": "Carbon negative by 2030"}
+  ]
+}

@@ -190,8 +190,25 @@ function emitAction(name,args){ // the only way the surface changes the world: a
   document.getElementById("meta").textContent = "action emitted → "+name+" "+JSON.stringify(args);
 }
 
-function render(surface){const byId={};surface.components.forEach(c=>byId[c.id]=c);const ctx={byId,dm:surface.dataModel||{}};
-  const mount=document.getElementById("mount");mount.textContent="";mount.append(renderComponent(byId[surface.root],ctx));}
+function render(surface){
+  const byId={};
+  surface.components.forEach(c=>byId[c.id]=c);
+  if(!surface.root || !byId[surface.root]){
+    surface.root = "root";
+    const parented = new Set();
+    surface.components.forEach(c=>{
+      if(c.children) c.children.forEach(id=>parented.add(id));
+    });
+    const rootChildren = surface.components
+      .filter(c=>!parented.has(c.id) && c.id!=="root")
+      .map(c=>c.id);
+    const syntheticRoot = {id:"root", type:"Column", children:rootChildren};
+    byId["root"] = syntheticRoot;
+    surface.components.push(syntheticRoot);
+  }
+  const ctx={byId,dm:surface.dataModel||{}};
+  const mount=document.getElementById("mount");mount.textContent="";mount.append(renderComponent(byId[surface.root],ctx));
+}
 
 // ---- AG-UI live state channel, with STATE_SNAPSHOT reconnect ---------------
 // The client folds STATE_DELTA events into a data model exactly as the server
@@ -251,7 +268,15 @@ function openStream(){
 }
 
 async function boot(){
-  const res = await fetch(`/v1/runs/${RUN}/surface`);const data = await res.json();
+  let res = await fetch(`/v1/runs/${RUN}/composed`);
+  let data;
+  if (res.ok) {
+    data = await res.json();
+  }
+  if (!data || !data.surface) {
+    res = await fetch(`/v1/runs/${RUN}/surface`);
+    data = await res.json();
+  }
   document.getElementById("badge").textContent = (data.clean===false?"UNSAFE":"safe · "+ (data.component_count||data.surface.components.length) +" components · 0 executable");
   document.getElementById("meta").textContent = "declarative surface rendered natively";
   render(data.surface);

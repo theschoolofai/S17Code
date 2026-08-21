@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Shoe Configurator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A professional 3D Shoe Configurator page.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A professional 3D Shoe Configurator page.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #ui { position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.8); padding: 15px; border-radius: 8px; }
+        .control { margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h3>Shoe Configurator</h3>
+        <div class="control"><label>Sole: <input type="color" id="soleColor" value="#ffffff"></label></div>
+        <div class="control"><label>Laces: <input type="color" id="lacesColor" value="#ffffff"></label></div>
+        <div class="control"><label>Upper: <input type="color" id="upperColor" value="#ffffff"></label></div>
+    </div>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        camera.position.set(2, 2, 2);
+
+        new RGBELoader().load('https://threejs.org/examples/textures/2to1_yokohama_station_front.jpg', (texture) => {
+            texture.mapping = THREE.EquirectangularReflectionMapping;
+            scene.environment = texture;
+        });
+
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshStandardMaterial({ color: 0x999999 }));
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        let shoe;
+        new GLTFLoader().load('https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/MaterialsVariantsShoe/glTF/MaterialsVariantsShoe.gltf', (gltf) => {
+            shoe = gltf.scene;
+            shoe.traverse(child => { if(child.isMesh) child.castShadow = true; });
+            scene.add(shoe);
+        });
+
+        function updateColor(partName, color) {
+            if(!shoe) return;
+            shoe.traverse(child => {
+                if(child.isMesh && child.name.includes(partName)) {
+                    child.material.color.set(color);
+                }
+            });
+        }
+
+        document.getElementById('soleColor').addEventListener('input', (e) => updateColor('Sole', e.target.value));
+        document.getElementById('lacesColor').addEventListener('input', (e) => updateColor('Laces', e.target.value));
+        document.getElementById('upperColor').addEventListener('input', (e) => updateColor('Upper', e.target.value));
+
+        function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
+        animate();
+    </script>
+</body>
+</html>

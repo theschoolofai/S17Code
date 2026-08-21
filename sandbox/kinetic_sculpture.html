@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Kinetic Wireframe Sculpture</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #05050a; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.18"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+</head>
+<body>
+<script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(5, 5, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    
+    const composer = new THREE.EffectComposer(renderer);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    const bloom = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    composer.addPass(bloom);
+
+    const config = { speedX: 0.02, speedY: 0.03, speedZ: 0.05, pulseRate: 0.05, color: '#00ffcc' };
+    const gui = new lil.GUI();
+    gui.add(config, 'speedX', 0, 0.1); gui.add(config, 'speedY', 0, 0.1); gui.add(config, 'speedZ', 0, 0.1);
+    gui.add(config, 'pulseRate', 0, 0.2); gui.addColor(config, 'color').onChange(v => core.material.color.set(v));
+
+    const createRing = (radius) => {
+        const geo = new THREE.TorusGeometry(radius, 0.05, 16, 100);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x444444 });
+        return new THREE.Mesh(geo, mat);
+    };
+
+    const ringX = createRing(2); const ringY = createRing(2.5); const ringZ = createRing(3);
+    ringY.rotation.x = Math.PI / 2; ringZ.rotation.y = Math.PI / 2;
+    scene.add(ringX, ringY, ringZ);
+
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), new THREE.MeshBasicMaterial({ color: 0x00ffcc }));
+    scene.add(core);
+
+    function animate(time) {
+        requestAnimationFrame(animate);
+        ringX.rotation.x += config.speedX; ringY.rotation.y += config.speedY; ringZ.rotation.z += config.speedZ;
+        const scale = 1 + Math.sin(time * config.pulseRate) * 0.2;
+        core.scale.set(scale, scale, scale);
+        composer.render();
+    }
+    animate(0);
+</script>
+</body>
+</html>

@@ -162,5 +162,5 @@ def copy_within_workspace(workspace, ledger, source: str, destination: str,
     size = dst.stat().st_size
     # The copy is now readable-for-edit: the bytes came from a file the
     # workspace already trusted, not from anything the model wrote.
-    ledger.read.add(str(destination))
+    ledger.read.add(workspace.relative(dst))
     return {"copied": True, "source": source, "destination": destination, "bytes": size}

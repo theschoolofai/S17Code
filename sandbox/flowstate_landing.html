@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flowstate | Automate Your Workflow</title>
+    <style>
+        :root { --accent: #6366f1; --bg: #05050a; --text: #f8fafc; --card: #1e293b; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+        nav { position: sticky; top: 0; background: rgba(5, 5, 10, 0.8); backdrop-filter: blur(12px); padding: 1rem 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; }
+        .btn { padding: 0.75rem 1.5rem; border-radius: 16px; text-decoration: none; font-weight: 600; transition: all 0.3s ease; display: inline-block; }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px -5px var(--accent); }
+        .hero { padding: 8rem 0; text-align: center; }
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; padding: 4rem 0; }
+        .card { background: var(--card); padding: 2rem; border-radius: 24px; transition: transform 0.3s; }
+        .card:hover { transform: translateY(-10px); }
+        .reveal { opacity: 0; transform: translateY(30px); transition: all 0.8s ease-out; }
+        .reveal.visible { opacity: 1; transform: translateY(0); }
+        footer { padding: 4rem 0; border-top: 1px solid #1e293b; margin-top: 4rem; }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container" style="display:flex; width:100%; justify-content:space-between; align-items:center;">
+            <strong style="font-size: 1.5rem;">Flowstate</strong>
+            <div style="gap: 2rem; display: flex;"><span>Product</span><span>Features</span><span>Pricing</span><span>About</span></div>
+            <a href="#" class="btn btn-primary">Get Started</a>
+        </div>
+    </nav>
+    <header class="hero container">
+        <h1 style="font-size: 4rem; margin-bottom: 1rem;">Automate your daily workflow with AI</h1>
+        <p style="font-size: 1.25rem; color: #94a3b8; max-width: 600px; margin: 0 auto 2rem;">Focus on what matters while Flowstate handles the rest. Seamless integration for modern teams.</p>
+        <div style="gap: 1rem; display: flex; justify-content: center;">
+            <a href="#" class="btn btn-primary">Start Free Trial</a>
+            <a href="#" class="btn" style="border: 1px solid #334155;">View Demo</a>
+        </div>
+    </header>
+    <section class="container feature-grid">
+        <div class="card reveal"><h3>Smart Sync</h3><p>Keep your team aligned automatically across all platforms.</p></div>
+        <div class="card reveal"><h3>AI Insights</h3><p>Data-driven decisions in real-time with predictive analytics.</p></div>
+        <div class="card reveal"><h3>Auto-Flow</h3><p>Eliminate repetitive manual tasks with custom AI triggers.</p></div>
+    </section>
+    <script>
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(e => { if(e.isIntersecting) e.target.classList.add('visible'); });
+        }, { threshold: 0.1 });
+        document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+    </script>
+</body>
+</html>

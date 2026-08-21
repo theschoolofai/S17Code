@@ -12,7 +12,7 @@ here*, never switched on by name somewhere else:
 * `Capability.evidence` declares how a result becomes answer-worker evidence,
   so adding a capability never means editing the runtime;
 * `Capability.families` groups capabilities for components that need a class of
-  capability ("which of these gather evidence?") rather than a specific one.
+  capability ("which of these gather evidence?") rather than a specific one.    
 
 If you find yourself writing `if skill == "something"` outside this module, the
 missing piece is a declaration here.

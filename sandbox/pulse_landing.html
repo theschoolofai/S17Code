@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pulse | Fitness Tracking</title>
+    <meta name="description" content="Pulse fitness tracking app landing page.">
+    <style>
+        :root { --accent: #ff3e82; --bg: #05050a; --text: #ffffff; }
+        body { margin: 0; font-family: sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
+        nav { display: flex; justify-content: space-between; padding: 2rem; align-items: center; }
+        .btn-download { background: var(--accent); border: none; padding: 0.8rem 1.5rem; border-radius: 2rem; color: white; font-weight: bold; cursor: pointer; display: flex; gap: 10px; }
+        .hero { padding: 4rem 2rem; text-align: center; }
+        .phone-mockup { width: 280px; height: 550px; border: 8px solid #333; border-radius: 40px; margin: 2rem auto; background: #111; position: relative; }
+        .stats-strip { display: flex; justify-content: space-around; padding: 4rem; background: #111; }
+        .feature-block { display: flex; align-items: center; padding: 4rem; gap: 2rem; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; padding: 2rem; }
+        .card { padding: 2rem; background: #1a1a2e; border-radius: 1rem; }
+        .reveal { opacity: 0; transition: opacity 1s; }
+        .reveal.active { opacity: 1; }
+    </style>
+</head>
+<body>
+    <nav>
+        <div style="font-weight: bold; font-size: 1.5rem;">PULSE</div>
+        <button class="btn-download">Download <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 2L2 22h20L12 2z"/></svg></button>
+    </nav>
+    <section class="hero">
+        <h1>Track Your Pulse</h1>
+        <p>The ultimate fitness companion for your daily goals.</p>
+        <div class="phone-mockup"></div>
+    </section>
+    <section class="stats-strip">
+        <div class="stat" data-target="2000000">0+</div>
+        <div class="stat" data-target="150">0+</div>
+    </section>
+    <section class="features">
+        <div class="feature-block">Feature 1</div>
+        <div class="feature-block">Feature 2</div>
+        <div class="feature-block">Feature 3</div>
+    </section>
+    <section class="reviews">
+        <div class="card">★★★★★ Great app!</div>
+        <div class="card">★★★★★ Life changing.</div>
+    </section>
+    <footer>&copy; 2023 Pulse Fitness</footer>
+    <script>
+        document.body.classList.add('js-enabled');
+        const stats = document.querySelectorAll('.stat');
+        const animate = (el) => {
+            const target = +el.getAttribute('data-target');
+            let count = 0;
+            const update = () => {
+                count += target / 100;
+                if(count < target) { el.innerText = Math.floor(count).toLocaleString() + '+'; requestAnimationFrame(update); }
+                else { el.innerText = target.toLocaleString() + '+'; }
+            };
+            update();
+        };
+        window.addEventListener('scroll', () => stats.forEach(animate), { once: true });
+    </script>
+</body>
+</html>

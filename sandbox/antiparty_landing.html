@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antigravity AI | Next-Gen Developer Platform</title>
+    <style>
+        :root { --bg: #05050a; --accent: #00f2ff; --glass: rgba(255, 255, 255, 0.05); }
+        body { margin: 0; font-family: sans-serif; background: var(--bg); color: white; overflow-x: hidden; }
+        .hero { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+        .cta { padding: 15px 30px; background: transparent; border: 1px solid var(--accent); color: var(--accent); cursor: pointer; transition: 0.3s; box-shadow: 0 0 15px rgba(0, 242, 255, 0.2); }
+        .cta:hover { background: var(--accent); color: var(--bg); }
+        .card { background: var(--glass); backdrop-filter: blur(10px); padding: 20px; border-radius: 15px; transition: transform 0.3s; }
+        .card:hover { transform: translateY(-10px); }
+        #terminal { background: #000; color: #0f0; padding: 20px; font-family: monospace; height: 200px; overflow: hidden; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <section class="hero">
+        <h1>Antigravity AI</h1>
+        <button class="cta">Get Started</button>
+    </section>
+    <div id="features" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 40px;">
+        <div class="card">Feature 1</div>
+        <div class="card">Feature 2</div>
+        <div class="card">Feature 3</div>
+    </div>
+    <div id="terminal"></div>
+    <div id="pricing">
+        <button onclick="togglePricing('monthly')">Monthly</button>
+        <button onclick="togglePricing('annual')">Annual</button>
+        <div id="price-display">$49/mo</div>
+    </div>
+    <form id="newsletter">
+        <input type="email" id="email" placeholder="Enter email" required>
+        <button type="submit">Subscribe</button>
+    </form>
+    <script>
+        const term = document.getElementById('terminal');
+        const code = "const gravity = false;\nconsole.log('Antigravity initialized...');";
+        let i = 0; 
+        function type() { if(i < code.length) { term.textContent += code[i++]; setTimeout(type, 50); } }
+        type();
+        function togglePricing(type) { document.getElementById('price-display').textContent = type === 'annual' ? '$499/yr' : '$49/mo'; }
+        document.getElementById('newsletter').onsubmit = (e) => {
+            e.preventDefault();
+            try { localStorage.setItem('email', document.getElementById('email').value); alert('Saved!'); } catch(err) { console.error(err); }
+        };
+    </script>
+</body>
+</html>

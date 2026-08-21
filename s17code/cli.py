@@ -13,7 +13,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "serve":
         import uvicorn
-        uvicorn.run("s17code.main:app", host=args.host, port=args.port, reload=False)
+        uvicorn.run("s17code.main:app", host=args.host, port=args.port, reload=True)
 
 
 if __name__ == "__main__":

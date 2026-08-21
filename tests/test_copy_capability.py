@@ -61,3 +61,9 @@ def test_neither_end_may_leave_the_workspace(ws, escape: str) -> None:
         copy_within_workspace(workspace, ledger, "base.html", escape)
     with pytest.raises(Exception):
         copy_within_workspace(workspace, ledger, escape, "deck.html")
+
+
+def test_copy_records_workspace_relative_normalized_path(ws) -> None:
+    workspace, ledger = ws
+    copy_within_workspace(workspace, ledger, "base.html", "./deck.html")
+    assert "deck.html" in ledger.read

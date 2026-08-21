@@ -37,13 +37,14 @@ class RunBody(ScopeBody):
     prompt: str = Field(min_length=1, max_length=40_000)
     # How the run should answer: a plain text answer ("text", the default) or a
     # composed, validated A2UI interface ("ui"). Additive and domain-agnostic.
-    respond_as: str = Field(default="text", pattern="^(text|ui)$")
+    respond_as: str = Field(default="text", pattern="^(text|ui|threejs)$")
     # S15: hand the run a ceiling. Omit it and the run is unbudgeted, exactly as
     # before. The principal defaults to the memory scope, so cost attributes to
     # the same tenant/project/user/agent the evidence was authorised for.
     budget: float | None = Field(default=None, gt=0)
     principal: str | None = Field(default=None, max_length=200)
     allowed_side_effects: list[str] = Field(default_factory=list, max_length=20)
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ResumeBody(BaseModel):
@@ -192,7 +193,8 @@ async def run(body: RunBody, request: Request):
                                  source_uri="api://agent/runs", source_author=body.user_id or "api-user",
                                  respond_as=body.respond_as, budget=body.budget, principal=body.principal,
                                  allowed_side_effects=set(body.allowed_side_effects),
-                                 transport=request.app.state.gateway)
+                                 transport=request.app.state.gateway,
+                                 run_id=body.run_id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     except RuntimeError as error:

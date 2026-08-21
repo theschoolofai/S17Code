@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MIT Cheetah Motor Visualizer</title>
+    <meta name="description" content="Interactive 3D visualizer of a brushless pancake motor.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Interactive 3D visualizer of a brushless pancake motor.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #05050a; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.18"></script>
+</head>
+<body>
+<script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(5, 5, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, 10, 5);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    const config = { speed: 0.02, explode: 0 };
+    const gui = new lil.GUI();
+    gui.add(config, 'speed', 0, 0.1);
+    gui.add(config, 'explode', 0, 1);
+
+    const stator = new THREE.Group();
+    const copperMat = new THREE.MeshStandardMaterial({ color: 0xd47a2a, metalness: 0.8, roughness: 0.2 });
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2;
+        const coil = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.5, 16), copperMat);
+        coil.position.set(Math.cos(angle) * 1.8, 0, Math.sin(angle) * 1.8);
+        coil.rotation.x = Math.PI / 2;
+        stator.add(coil);
+    }
+    scene.add(stator);
+
+    const rotor = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.3, 32), new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.9 }));
+    scene.add(rotor);
+
+    const gearbox = new THREE.Group();
+    const sunGear = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.5), new THREE.MeshStandardMaterial({ color: 0xaaaaaa }));
+    gearbox.add(sunGear);
+    scene.add(gearbox);
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const explodeDistance = 3.0;
+        stator.position.z = -config.explode * explodeDistance;
+        rotor.position.z = config.explode * explodeDistance;
+        
+        sunGear.rotation.y += config.speed;
+        rotor.rotation.y += config.speed * 0.5;
+        
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
