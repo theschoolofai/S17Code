@@ -173,3 +173,58 @@ def test_ambiguity_is_still_refused_after_de_guttering(tmp_path):
 
     with pytest.raises(EditError, match="appears 2 times"):
         apply_edit(repo, ledger, "d.py", old_string=anchor, new_string="x = 2")
+
+
+def test_an_edit_that_would_break_the_file_is_refused(repo):
+    """The damage the numbered view actually caused, on two separate runs.
+
+    A replacement reasoned out of `text` arrives indented to match the gutter
+    rather than the block, which parses as nothing:
+
+        if not numbers:
+                return 0
+            return sum(numbers) / len(numbers)
+
+    Written, that costs the whole run: the next pytest fails on an
+    IndentationError instead of the bug, and the agent spends its remaining
+    turns repairing the tool's mistake.
+    """
+    ledger = EditLedger()
+    read_code(repo, ledger, "average.py")
+    before = (repo.root / "average.py").read_text(encoding="utf-8")
+
+    with pytest.raises(EditError, match="unparseable"):
+        apply_edit(repo, ledger, "average.py",
+                   old_string="    return sum(numbers) / len(numbers)",
+                   new_string=("    if not numbers:\n"
+                               "            return 0\n"
+                               "        return sum(numbers) / len(numbers)"))
+
+    assert (repo.root / "average.py").read_text(encoding="utf-8") == before, \
+        "a refused edit must not touch the file"
+
+
+def test_a_valid_edit_still_goes_through(repo):
+    ledger = EditLedger()
+    read_code(repo, ledger, "average.py")
+    apply_edit(repo, ledger, "average.py",
+               old_string="    return sum(numbers) / len(numbers)",
+               new_string=("    if not numbers:\n"
+                           "        return 0\n"
+                           "    return sum(numbers) / len(numbers)"))
+
+    namespace: dict = {}
+    exec((repo.root / "average.py").read_text(encoding="utf-8"), namespace)  # noqa: S102
+    assert namespace["average"]([]) == 0
+
+
+def test_a_non_python_file_is_not_syntax_checked(tmp_path):
+    """Only Python is checked; anything else is left alone rather than guessed at."""
+    (tmp_path / "notes.md").write_text("# heading\n\nsome prose\n", encoding="utf-8")
+    repo = Workspace(tmp_path)
+    ledger = EditLedger()
+    read_code(repo, ledger, "notes.md")
+
+    apply_edit(repo, ledger, "notes.md", old_string="some prose",
+               new_string="def not_python(:::")
+    assert "def not_python(:::" in (tmp_path / "notes.md").read_text(encoding="utf-8")

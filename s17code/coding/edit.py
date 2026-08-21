@@ -94,6 +94,24 @@ def _without_line_numbers(text: str) -> str | None:
     return "\n".join(_GUTTER.sub("", line, count=1) for line in lines)
 
 
+def _python_syntax_error(relative: str, text: str) -> str | None:
+    """The syntax error this content would raise, if it is Python and broken.
+
+    Only Python is checked, because it is the only language whose parser ships
+    with us. A file we cannot parse is left alone rather than guessed about.
+    """
+    if not str(relative).endswith(".py"):
+        return None
+    try:
+        compile(text, str(relative), "exec")
+    except SyntaxError as error:
+        where = f" (line {error.lineno})" if error.lineno else ""
+        return f"{type(error).__name__}: {error.msg}{where}"
+    except ValueError as error:          # e.g. source containing a null byte
+        return f"{type(error).__name__}: {error}"
+    return None
+
+
 def apply_edit(workspace: Workspace, ledger: EditLedger, relative: str, *,
                old_string: str, new_string: str, replace_all: bool = False) -> dict:
     """Replace an exact, unique string. Refuses on anything ambiguous."""
@@ -159,6 +177,26 @@ def apply_edit(workspace: Workspace, ledger: EditLedger, relative: str, *,
 
     updated = (original.replace(old_string, new_string) if replace_all
                else original.replace(old_string, new_string, 1))
+
+    # An edit that leaves the file unparseable is not an edit, it is damage. The
+    # agent's next step is a test run, which will fail for a reason that has
+    # nothing to do with the bug it was chasing, and it will then spend its turns
+    # repairing the tool's mistake. Refuse instead, and say where.
+    #
+    # This bites hardest on indentation, because the numbered view read_code
+    # returns puts the code at column nine, so a replacement reasoned out of it
+    # arrives indented to match the gutter rather than the block:
+    #     if not numbers:
+    #             return 0
+    #         return sum(numbers) / len(numbers)
+    broken = _python_syntax_error(relative, updated)
+    if broken:
+        raise EditError(
+            f"that edit would leave {relative} unparseable, so it was not written: "
+            f"{broken}. Send the replacement with the indentation the file actually "
+            f"uses — read_code's 'content' shows it without the line-number gutter."
+        )
+
     path.write_text(updated, encoding="utf-8")
     return {
         "path": relative,
