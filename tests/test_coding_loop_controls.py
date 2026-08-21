@@ -26,6 +26,15 @@ def _verify_node(command: str, exit_code: int) -> dict:
             "input": {"command": command}, "result": {"exit_code": exit_code}}
 
 
+_ANCHOR_MISS = ("EditError: old_string does not appear in app.js. It must match exactly, "
+                "including indentation and whitespace.")
+
+
+def _failed_node(skill: str, error: str, **input_) -> dict:
+    """What the executor writes when a worker raises: failed, no exit code."""
+    return {"skill": skill, "state": "failed", "input": input_, "result": {"error": error}}
+
+
 def _planner(**kwargs) -> GeneralAgentPlanner:
     async def never(p, s): raise AssertionError("no model call expected")
     return GeneralAgentPlanner(never, default_registry(), goal="x", **kwargs)
@@ -37,14 +46,14 @@ def test_a_command_failing_the_same_way_repeatedly_stops_the_run() -> None:
     """The node limit misses this: a command returning 1 has *succeeded* at running."""
     planner = _planner(max_repeat_failures=4)
     graph = _Snapshot({f"v{i}": _verify_node("node check.js", 1) for i in range(4)})
-    stuck = planner._stuck_verification(graph)          # noqa: SLF001
-    assert stuck == ("node check.js", 4)
+    stuck = planner._stuck(graph)                       # noqa: SLF001
+    assert stuck == ("the command 'node check.js'", 4)
 
 
 def test_three_failures_are_still_iteration_not_thrashing() -> None:
     planner = _planner(max_repeat_failures=4)
     graph = _Snapshot({f"v{i}": _verify_node("node check.js", 1) for i in range(3)})
-    assert planner._stuck_verification(graph) is None   # noqa: SLF001
+    assert planner._stuck(graph) is None                # noqa: SLF001
 
 
 def test_a_pass_forgives_everything_before_it() -> None:
@@ -52,20 +61,81 @@ def test_a_pass_forgives_everything_before_it() -> None:
     planner = _planner(max_repeat_failures=2)
     nodes = {f"v{i}": _verify_node("pytest -q", 1) for i in range(5)}
     nodes["v_ok"] = _verify_node("pytest -q", 0)
-    assert planner._stuck_verification(_Snapshot(nodes)) is None   # noqa: SLF001
+    assert planner._stuck(_Snapshot(nodes)) is None     # noqa: SLF001
 
 
 def test_different_commands_are_tallied_separately() -> None:
     planner = _planner(max_repeat_failures=3)
     nodes = {"a1": _verify_node("pytest -q", 1), "a2": _verify_node("pytest -q", 1),
              "b1": _verify_node("node check.js", 1), "b2": _verify_node("node check.js", 1)}
-    assert planner._stuck_verification(_Snapshot(nodes)) is None   # noqa: SLF001
+    assert planner._stuck(_Snapshot(nodes)) is None     # noqa: SLF001
 
 
 def test_the_ceiling_can_be_switched_off() -> None:
     planner = _planner(max_repeat_failures=0)
     graph = _Snapshot({f"v{i}": _verify_node("pytest", 1) for i in range(50)})
-    assert planner._stuck_verification(graph) is None  # noqa: SLF001
+    assert planner._stuck(graph) is None                # noqa: SLF001
+
+
+# ---------------------------------------- the ceiling counts edits, not only tests
+
+def test_an_edit_failing_the_same_way_repeatedly_stops_the_run() -> None:
+    """The gap: a raising capability fails its node, so the verify tally never sees it.
+
+    Twenty-one identical anchor misses ran unbounded under a ceiling of four,
+    because the only thing counted was the verify family — i.e. run_command.
+    """
+    planner = _planner(max_repeat_failures=4)
+    graph = _Snapshot({f"e{i}": _failed_node("edit_code", _ANCHOR_MISS, path="app.js")
+                       for i in range(21)})
+    stuck = planner._stuck(graph)                       # noqa: SLF001
+    assert stuck is not None
+    what, times = stuck
+    assert what.startswith("edit_code (EditError: old_string does not appear in app.js")
+    assert times == 21
+
+
+def test_three_failed_edits_are_still_iteration() -> None:
+    planner = _planner(max_repeat_failures=4)
+    graph = _Snapshot({f"e{i}": _failed_node("edit_code", _ANCHOR_MISS, path="app.js")
+                       for i in range(3)})
+    assert planner._stuck(graph) is None                # noqa: SLF001
+
+
+def test_edits_failing_differently_are_tallied_separately() -> None:
+    """Different errors mean the run is learning something each time."""
+    planner = _planner(max_repeat_failures=3)
+    nodes = {f"e{i}": _failed_node("edit_code", f"EditError: not a file: page{i}.js")
+             for i in range(6)}
+    assert planner._stuck(_Snapshot(nodes)) is None     # noqa: SLF001
+
+
+def test_the_edit_ceiling_is_the_same_knob() -> None:
+    """S17_MAX_REPEAT_FAILURES=0 switches off both tallies, not just the verify one."""
+    planner = _planner(max_repeat_failures=0)
+    graph = _Snapshot({f"e{i}": _failed_node("edit_code", _ANCHOR_MISS) for i in range(50)})
+    assert planner._stuck(graph) is None                # noqa: SLF001
+
+
+def test_a_failure_with_no_error_recorded_is_not_counted() -> None:
+    planner = _planner(max_repeat_failures=2)
+    nodes = {f"e{i}": {"skill": "edit_code", "state": "failed", "input": {}, "result": None}
+             for i in range(9)}
+    assert planner._stuck(_Snapshot(nodes)) is None     # noqa: SLF001
+
+
+def test_the_stop_reason_names_the_edit_that_kept_failing() -> None:
+    """A stop the operator cannot read is a stop they will switch off."""
+    import asyncio
+
+    from s17code.core.live_graph import Event
+
+    planner = _planner(max_repeat_failures=4)
+    graph = _Snapshot({f"e{i}": _failed_node("edit_code", _ANCHOR_MISS, path="app.js")
+                       for i in range(21)})
+    patch = asyncio.run(planner.plan(graph, Event(1, "task_failed", "e0", {})))
+    assert patch.finish
+    assert "edit_code" in patch.reason and "21 times" in patch.reason
 
 
 # --------------------------------------------------------- the validator
