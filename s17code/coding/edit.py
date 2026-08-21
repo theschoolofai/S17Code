@@ -146,6 +146,7 @@ def copy_within_workspace(workspace, ledger, source: str, destination: str,
     """
     src = workspace.resolve(source)
     dst = workspace.resolve(destination)
+    guard_path(destination, action="copy over")
     if not src.is_file():
         raise EditError(f"cannot copy {source}: it does not exist")
     if dst.exists() and not overwrite:
