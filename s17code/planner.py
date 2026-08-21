@@ -224,11 +224,15 @@ class GeneralAgentPlanner:
             if node["skill"] not in self.registry.family("verify"):
                 continue
             result = node.get("result") or {}
-            if result.get("exit_code") in (0, None):
-                tally.pop(str((node.get("input") or {}).get("command", "")), None)
+            # run_command reports exit_code; validate_work reports passed. Both
+            # are verify-family, so both must count toward the ceiling.
+            key = str((node.get("input") or {}).get("command")
+                      or (node.get("input") or {}).get("requirement") or "")
+            failed = result.get("exit_code") not in (0, None) or result.get("passed") is False
+            if not failed:
+                tally.pop(key, None)
                 continue          # it passed: whatever went before is forgiven
-            command = str((node.get("input") or {}).get("command", ""))
-            tally[command] = tally.get(command, 0) + 1
+            tally[key] = tally.get(key, 0) + 1
         worst = max(tally.items(), key=lambda kv: kv[1], default=None)
         if worst and worst[1] >= self.max_repeat_failures:
             return worst
