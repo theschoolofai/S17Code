@@ -18,8 +18,8 @@ arithmetic at all.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .guard import guard_path
 from .workspace import Workspace
@@ -66,7 +66,32 @@ def read_code(workspace: Workspace, ledger: EditLedger, relative: str, *,
         "total_lines": len(lines),
         "truncated": end < len(lines),
         "text": "\n".join(f"{start + i:>6}  {line}" for i, line in enumerate(window)),
+        # The same window without the gutter. `text` is for reading — the numbers
+        # are what make a ranged read worth anything — but `apply_edit` matches
+        # the file byte for byte, so an anchor has to come from somewhere the
+        # numbers were never added. Returning both means a caller never has to
+        # reconstruct one from the other.
+        "content": "\n".join(window),
     }
+
+
+# `read_code` renders every line as f"{number:>6}  {line}". That numbered view is
+# the only representation of the file the agent is given, and `require_read`
+# means it must go through it before editing — so an anchor copied out of it is
+# the normal case, not a mistake.
+_GUTTER = re.compile(r"^\s*\d+  ")
+
+
+def _without_line_numbers(text: str) -> str | None:
+    """Strip read_code's gutter, but only if every line carries one.
+
+    Returning None means "this does not look like the numbered view", which
+    keeps a file whose own content happens to start with numbers safe.
+    """
+    lines = text.split("\n")
+    if not lines or not all(_GUTTER.match(line) for line in lines):
+        return None
+    return "\n".join(_GUTTER.sub("", line, count=1) for line in lines)
 
 
 def apply_edit(workspace: Workspace, ledger: EditLedger, relative: str, *,
@@ -87,10 +112,44 @@ def apply_edit(workspace: Workspace, ledger: EditLedger, relative: str, *,
     occurrences = original.count(old_string)
 
     if occurrences == 0:
-        raise EditError(
-            f"old_string does not appear in {relative}. It must match exactly, "
-            "including indentation and whitespace."
-        )
+        # The literal form is always preferred; this is only a fallback for an
+        # anchor that matches nothing as given. Without it the mandatory
+        # read-then-edit sequence cannot be completed at all: the read hands back
+        # a numbered view and the edit demands the unnumbered file.
+        candidate = _without_line_numbers(old_string)
+        if candidate and candidate != old_string and original.count(candidate):
+            old_string, occurrences = candidate, original.count(candidate)
+            # The anchor can be de-guttered safely because it is checked: strip it
+            # wrongly and it simply fails to match. The replacement is free text
+            # and cannot be checked against anything, so guessing there is not
+            # safe and this refuses instead.
+            #
+            # Both wrong answers were tried on real runs before this one. Writing
+            # the replacement verbatim put a line number in the source:
+            #     3      return sum(numbers) / len(numbers) if numbers else 0
+            # De-guttering it line by line could not recover the indentation when
+            # the model's gutter widths were uneven, and produced Python that did
+            # not parse:
+            #     if not numbers:
+            #             return 0
+            #         return sum(numbers) / len(numbers)
+            # A refused edit costs one turn. A file silently broken costs the run.
+            if _without_line_numbers(new_string) is not None:
+                raise EditError(
+                    f"new_string looks like it still carries read_code's line "
+                    f"numbers. The anchor may be copied from the numbered view, but "
+                    f"the replacement is written into {relative} exactly as given — "
+                    f"send it as the code alone, with the real indentation and no "
+                    f"line numbers. read_code also returns 'content', which is the "
+                    f"same lines without the gutter."
+                )
+        else:
+            raise EditError(
+                f"old_string does not appear in {relative}. It must match the file "
+                "exactly, including indentation and whitespace. Note that the line "
+                "numbers read_code puts in front of each line are not part of the "
+                "file — the anchor is the code itself."
+            )
     if occurrences > 1 and not replace_all:
         raise EditError(
             f"old_string appears {occurrences} times in {relative}. Include more "
