@@ -113,19 +113,21 @@ class GeneralAgentPlanner:
 
         # Failing the same way repeatedly is not iteration, it is thrashing.
         # A coding loop is supposed to converge: each attempt reads a failure and
-        # changes something that matters. When the same verification keeps coming
-        # back with the same non-zero exit, the agent is no longer learning from
-        # it, and the next edit is as likely to make things worse as better. We
-        # saw exactly that: ten edits to a test harness, four identical failures,
-        # and the last edit removed a declaration while leaving its use.
+        # changes something that matters. When the same step keeps coming back
+        # with the same outcome, the agent is no longer learning from it, and the
+        # next edit is as likely to make things worse as better. We saw exactly
+        # that: ten edits to a test harness, four identical failures, and the last
+        # edit removed a declaration while leaving its use.
         #
-        # The graph's node limit does not catch this, because none of those nodes
-        # failed: a command that returns 1 has *succeeded* at running.
-        stuck = self._stuck_verification(graph)
+        # The graph's node limit does not catch either shape of this. A command
+        # that returns 1 has *succeeded* at running, so its node never fails; a
+        # capability that raises fails its own node, which nothing tallied at all
+        # until this ceiling learned to count it.
+        stuck = self._stuck(graph)
         if stuck:
-            command, times = stuck
+            what, times = stuck
             return GraphPatch(finish=True, reason=(
-                f"stopping: {command!r} has failed {times} times without converging. "
+                f"stopping: {_clip(what, chars=240)} has failed {times} times without converging. "
                 "Repeating an edit-and-retry loop past this point tends to damage "
                 "the work rather than fix it. What is being attempted is probably "
                 "not where the problem is."))
@@ -213,10 +215,29 @@ class GeneralAgentPlanner:
                           metadata={"metered_calls": metered_calls,
                                     "budget_decisions": budget_decisions})
 
-    def _stuck_verification(self, graph: GraphSnapshot) -> tuple[str, int] | None:
-        """Has one verification command failed the same way too many times?"""
+    def _stuck(self, graph: GraphSnapshot) -> tuple[str, int] | None:
+        """Has one step of the run failed the same way too many times?
+
+        There are two ways to fail without converging, and they need separate
+        tallies because they leave different marks on the graph. A verification
+        that keeps returning non-zero *succeeds* as a node. A capability that
+        raises *fails* as a node and carries no exit code at all. Counting only
+        the first is what let twenty-one identical ``edit_code`` refusals run
+        unbounded under ``S17_MAX_REPEAT_FAILURES=4``: the ceiling guarded "the
+        same test keeps failing" and not "the same edit keeps failing".
+        """
         if self.max_repeat_failures <= 0:
             return None
+        tally = {f"the command {command!r}": times
+                 for command, times in self._repeated_verification_failures(graph).items()}
+        tally.update(self._repeated_capability_failures(graph))
+        worst = max(tally.items(), key=lambda kv: kv[1], default=None)
+        if worst and worst[1] >= self.max_repeat_failures:
+            return worst
+        return None
+
+    def _repeated_verification_failures(self, graph: GraphSnapshot) -> dict[str, int]:
+        """How often each verification command has come back non-zero, unforgiven."""
         tally: dict[str, int] = {}
         for node in graph.nodes.values():
             if node["state"] != "succeeded":
@@ -229,10 +250,35 @@ class GeneralAgentPlanner:
                 continue          # it passed: whatever went before is forgiven
             command = str((node.get("input") or {}).get("command", ""))
             tally[command] = tally.get(command, 0) + 1
-        worst = max(tally.items(), key=lambda kv: kv[1], default=None)
-        if worst and worst[1] >= self.max_repeat_failures:
-            return worst
-        return None
+        return tally
+
+    def _repeated_capability_failures(self, graph: GraphSnapshot) -> dict[str, int]:
+        """How often each capability has raised one exact error.
+
+        The verification tally sees only the verify family, and within it only
+        nodes that succeeded at running. A capability that raises reaches neither
+        test: ``edit_code`` with an anchor that does not match the file fails its
+        node, so nothing counted it and ``max_nodes`` was the only thing left
+        standing between a mismatched anchor and thirty-two attempts at it.
+
+        Unlike an exit code, a raised error has no later "it passed this time"
+        recorded against the same key, and snapshot nodes carry no timestamp to
+        order a forgiveness rule by. So the question here is deliberately
+        order-independent: has one capability produced this exact error
+        ``max_repeat_failures`` times? Byte-identical repetition is itself the
+        evidence — whatever else the run got done in between, this part of it
+        learned nothing from the last attempt.
+        """
+        tally: dict[str, int] = {}
+        for node in graph.nodes.values():
+            if node["state"] != "failed":
+                continue
+            error = str((node.get("result") or {}).get("error", "")).strip()
+            if not error:
+                continue
+            signature = f"{node['skill']} ({error.splitlines()[0]})"
+            tally[signature] = tally.get(signature, 0) + 1
+        return tally
 
     def _parse(self, text: str, graph: GraphSnapshot) -> GraphPatch:
         data = _json_object(text)
