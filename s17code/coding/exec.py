@@ -105,6 +105,19 @@ def _check(argv: list[str]) -> None:
             raise CommandError("python -c is refused: it is an unbounded shell")
         if argument in FORBIDDEN_ARGS and program in {"pip", "uv"}:
             raise CommandError(f"{argument!r} is refused for {program}")
+    if program == "node":
+        # `node -e` is a shell by another name, same as `python -c`.
+        if any(a in {"-e", "--eval", "-p", "--print"} for a in argv[1:]):
+            raise CommandError("node -e/--eval is refused: it is an unbounded shell")
+    if program == "npm":
+        # `npm run`/`npm exec`/`npm install` execute arbitrary scripts from
+        # package.json and the registry; only the project's own tests are work.
+        subcommand = next((a for a in argv[1:] if not a.startswith("-")), "")
+        if subcommand != "test":
+            raise CommandError(
+                f"npm {subcommand or '(none)'} is refused: it can execute arbitrary "
+                "scripts. Only 'npm test' is allowed."
+            )
     if program == "git":
         # `git -c ...`, `--upload-pack` and friends can run arbitrary programs.
         subcommand = next((a for a in argv[1:] if not a.startswith("-")), "")
