@@ -76,6 +76,40 @@ class CommandResult:
                 "stdout": self.stdout, "stderr": self.stderr}
 
 
+
+def _pytest_args(argv: list[str]) -> list[str] | None:
+    """The argv tail that pytest itself would see, or None if this is not pytest."""
+    program = os.path.basename(argv[0])
+    if program in {"pytest", "py.test"}:
+        return argv[1:]
+    if program.startswith("python"):
+        for index, argument in enumerate(argv[1:], start=1):
+            if argument == "-m" and index + 1 < len(argv) and argv[index + 1] == "pytest":
+                return argv[index + 2:]
+    return None
+
+
+# Flags that make the suite green without running the judge.
+_PYTEST_SKIP_JUDGE = (
+    "--ignore", "--ignore-glob", "--override-ini", "--confcutdir", "--noconftest",
+)
+
+
+def _refuse_pytest_skipping_the_judge(argv: list[str]) -> None:
+    rest = _pytest_args(argv)
+    if rest is None:
+        return
+    for argument in rest:
+        name = argument.split("=", 1)[0]
+        if name in _PYTEST_SKIP_JUDGE:
+            raise CommandError(
+                "pytest must not skip or replace the judge "
+                f"({name} is refused)"
+            )
+        if argument == "-c":
+            raise CommandError("pytest -c replaces the judge config; refused")
+
+
 def allowlist() -> tuple[str, ...]:
     configured = os.getenv("S17_ALLOWED_COMMANDS", "").strip()
     if configured:
@@ -105,6 +139,7 @@ def _check(argv: list[str]) -> None:
             raise CommandError("python -c is refused: it is an unbounded shell")
         if argument in FORBIDDEN_ARGS and program in {"pip", "uv"}:
             raise CommandError(f"{argument!r} is refused for {program}")
+    _refuse_pytest_skipping_the_judge(argv)
     if program == "git":
         # `git -c ...`, `--upload-pack` and friends can run arbitrary programs.
         subcommand = next((a for a in argv[1:] if not a.startswith("-")), "")
