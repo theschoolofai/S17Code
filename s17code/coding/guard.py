@@ -26,6 +26,9 @@ DEFAULT_PROTECTED = (
     "tests/**", "test/**", "**/tests/**", "**/test_*.py", "**/*_test.py",
     "conftest.py", "**/conftest.py",
     "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", ".github/**",
+    # The JS harness is the judge for HTML work, the same way tests/ is for
+    # Python. package.json stays writable (#12 left npm run as the floor).
+    "webcheck.js", "**/webcheck.js",
 )
 
 
