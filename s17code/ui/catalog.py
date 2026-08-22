@@ -35,6 +35,15 @@ from dataclasses import dataclass, field
 class PropSpec:
     kind: str  # text | binding | enum | ref | action | number | bool
     values: tuple[str, ...] = ()  # for enum
+    # A ``text`` prop the client will ALSO resolve as a {"$bind": "/ptr"} if it
+    # is given one. The validator rejects a dict on a text prop — that is how a
+    # structure smuggles past a scalar check — so a prop the client genuinely
+    # resolves must say so here or its surfaces would be refused despite
+    # rendering correctly. Exactly one prop needs this today (``Card.title``);
+    # every other prop the client resolves is already declared ``binding``,
+    # which was verified by walking every ``resolve(c.X)`` in the render client
+    # against this catalog rather than by reading it hopefully.
+    bindable: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,7 +67,13 @@ COMPONENTS: dict[str, ComponentSpec] = {
     }, source="a2ui-basic"),
     "Column": ComponentSpec("Column", {"children": PropSpec("ref")}, source="a2ui-basic"),
     "List": ComponentSpec("List", {"children": PropSpec("ref")}, source="a2ui-basic"),
-    "Card": ComponentSpec("Card", {"title": PropSpec("text"), "children": PropSpec("ref")}, source="a2ui-basic"),
+    # Card.title is bindable because client/index.html:103 does
+    # `text(resolve(c.title, ctx.dm))` — the client has always accepted a
+    # binding here while this catalog said scalar-only. Declaring the truth is
+    # the fix; tightening the validator without it would reject Cards that
+    # render perfectly and read as the validator being broken.
+    "Card": ComponentSpec("Card", {"title": PropSpec("text", bindable=True),
+                                   "children": PropSpec("ref")}, source="a2ui-basic"),
     "Divider": ComponentSpec("Divider", {}, source="a2ui-basic"),
     "Text": ComponentSpec("Text", {
         "text": PropSpec("binding"),

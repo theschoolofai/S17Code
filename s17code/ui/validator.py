@@ -70,12 +70,38 @@ def _looks_like_js_url(value) -> bool:
 
 
 def validate_surface(surface: dict) -> ValidationResult:
-    """Validate one surface (``{root, components:[...]}``) against the catalog."""
+    """Validate one surface (``{root, components:[...]}``) against the catalog.
+
+    Never raises. This is the wall, and it is pointed at hostile input by
+    design, so an input it cannot parse must come back as a *rejection* and not
+    as an exception: an exception becomes a 500, a 500 is not a refusal, and a
+    wall that falls over when pushed is not a wall. Three one-line bodies used
+    to reach here and crash — a non-dict surface, a components list holding
+    integers, and components as a bare string.
+    """
     accepted: list[dict] = []
     rejections: list[Rejection] = []
-    components = surface.get("components", [])
 
-    for comp in components:
+    if not isinstance(surface, dict):
+        return ValidationResult([], [Rejection(
+            "<surface>", "surface", Invariant.CATALOG,
+            f"surface must be an object, got {type(surface).__name__}")])
+
+    components = surface.get("components", [])
+    # A string is iterable, so `for comp in "evil"` would loop over characters
+    # and fail one character at a time. Reject the shape, not its letters.
+    if not isinstance(components, (list, tuple)):
+        return ValidationResult([], [Rejection(
+            "<surface>", "components", Invariant.CATALOG,
+            f"components must be a list, got {type(components).__name__}")])
+
+    for index, comp in enumerate(components):
+        if not isinstance(comp, dict):
+            rejections.append(Rejection(
+                f"<index {index}>", "component", Invariant.CATALOG,
+                f"component must be an object, got {type(comp).__name__}"))
+            continue
+
         cid = comp.get("id", "<no id>")
         ctype = comp.get("type")
 
@@ -108,19 +134,43 @@ def validate_surface(surface: dict) -> ValidationResult:
                 break
 
             prop = spec.props[field_name]
-            if prop.kind in ("text", "binding") and _looks_like_markup(value):
+            # Markup is checked on EVERY kind, not just text and binding. The
+            # kind describes what the property means, not what a hostile agent
+            # will put in it: `Slider.max = "<img src=x onerror=alert(1)>"` was
+            # accepted, because `max` is a number prop and the check never ran.
+            if _looks_like_markup(value):
                 rejections.append(
                     Rejection(cid, field_name, Invariant.DATA_NOT_CODE, "value carries markup")
                 )
                 bad = True
                 break
+            # A structure where a scalar belongs. The markup check above is
+            # isinstance(str)-guarded, so a dict walks past it untouched and
+            # lands in the client as an object it was never told to expect.
+            # `bindable` is the declared exception: props the client really does
+            # resolve say so on the spec.
+            if prop.kind == "text" and isinstance(value, (dict, list)):
+                if not (prop.bindable and isinstance(value, dict) and set(value) == {"$bind"}):
+                    rejections.append(Rejection(
+                        cid, field_name, Invariant.DATA_NOT_CODE,
+                        f"{prop.kind} property must be a scalar, got {type(value).__name__}"))
+                    bad = True
+                    break
             if _looks_like_js_url(value):
                 rejections.append(
                     Rejection(cid, field_name, Invariant.DATA_NOT_CODE, "value is a script/data URL")
                 )
                 bad = True
                 break
-            if prop.kind == "binding" and not (isinstance(value, dict) and "$bind" in value):
+            # Exactly {"$bind": "<string>"} and nothing else. The old test was
+            # `isinstance(dict) and "$bind" in value`, which accepted
+            # {"$bind": 5} — and the pointer match on the next line then called
+            # a regex against an int and raised TypeError, turning a hostile
+            # surface into a 500. It also accepted {"$bind": "/ok", "onclick":
+            # "..."}, carrying an extra key straight through the wall.
+            if prop.kind == "binding" and not (
+                    isinstance(value, dict) and set(value) == {"$bind"}
+                    and isinstance(value["$bind"], str)):
                 # A binding must be an explicit {"$bind": "/pointer"}. Inline
                 # text where a binding belongs is how markup sneaks in.
                 rejections.append(
