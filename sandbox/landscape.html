@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Procedural Landscape</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #05050a; }
+        canvas { display: block; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.18"></script>
+</head>
+<body>
+<script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(10, 10, 10);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    const config = { roughness: 0.5, height: 2, wireframe: false };
+    const gui = new lil.GUI();
+    gui.add(config, 'roughness', 0, 2);
+    gui.add(config, 'height', 0, 5);
+    gui.add(config, 'wireframe').onChange(v => terrain.material.wireframe = v);
+
+    const geometry = new THREE.PlaneGeometry(20, 20, 64, 64);
+    const material = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true });
+    const terrain = new THREE.Mesh(geometry, material);
+    terrain.rotation.x = -Math.PI / 2;
+    terrain.receiveShadow = true;
+    terrain.castShadow = true;
+    scene.add(terrain);
+
+    function updateTerrain() {
+        const pos = terrain.geometry.attributes.position;
+        const colors = [];
+        for (let i = 0; i < pos.count; i++) {
+            const x = pos.getX(i);
+            const y = pos.getY(i);
+            const z = Math.sin(x * config.roughness) * Math.cos(y * config.roughness) * config.height;
+            pos.setZ(i, z);
+            
+            let color = new THREE.Color();
+            if (z < -0.5) color.set(0x0000ff); // Water
+            else if (z < 1.5) color.set(0x228822); // Grass
+            else color.set(0xffffff); // Snow
+            colors.push(color.r, color.g, color.b);
+        }
+        terrain.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        pos.needsUpdate = true;
+    }
+
+    const ship = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.5, 3), new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+    scene.add(ship);
+
+    function animate(time) {
+        requestAnimationFrame(animate);
+        updateTerrain();
+        ship.position.x = Math.sin(time * 0.001) * 5;
+        ship.position.z = Math.cos(time * 0.001) * 5;
+        ship.position.y = 1;
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate(0);
+</script>
+</body>
+</html>

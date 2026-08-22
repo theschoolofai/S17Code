@@ -1,5 +1,12 @@
 # S17Code — a general live-graph agent
 
+## 🎥 Demo Videos
+*   **Full S17 Demo (All Three Modes)**: [Watch on YouTube](https://www.youtube.com/watch?v=Snm4INdKFsQ)
+*   **Mode 2 (Frontend Direct Coding)**: [Watch on YouTube](https://www.youtube.com/watch?v=8PLQ89n44lA)
+*   **Mode 3 (3D Graphics & Animation - Three.js)**: [Watch on YouTube](https://www.youtube.com/watch?v=PVOSbXMCQns)
+
+---
+
 S17Code takes S15's durable graph, memory, A2A, UI, budget controller and
 telemetry as its foundation, then replaces the task-shaped planner with a
 general capability-driven agent loop. `glc_v5` connects that loop to every
@@ -131,6 +138,41 @@ checkout, so these gates refuse to serve instead.
 Do not put provider keys in S17Code. `glc_v5` can rotate among its configured
 Gemini keys behind the one logical `gemini` provider.
 
+### Running the AgentForge IDE (Lovable Clone)
+
+1. Ensure the gateway service `glc_v5` is running on port `8111`.
+2. Run `uv run s17code serve` to start the agent server on port `8113`.
+3. Open your browser and navigate to:
+   ```text
+   http://127.0.0.1:8113/workspace?token=test-control-token
+   ```
+4. Enter your coding prompt in the input launcher, select **General Q&A** mode, and click **Launch Run**. You will see:
+   *   **Live Graph Telemetry**: Visual nodes updating in real time as the agent proposes work.
+   *   **Console logs**: Live streams of subprocess executions (e.g., verification runs).
+   *   **Output Sandbox**: Live preview of the generated HTML page inside the interactive sandbox iframe.
+
+### Shipped Sandbox Applications
+
+We have generated and verified the following responsive HTML5 web applications directly inside the `/sandbox` workspace:
+
+1.  **Cyberpunk Pomodoro & Task Dashboard (`pomodoro.html`)**:
+    *   *Features*: Visual neon/glow-style Pomodoro timer with dynamic session/break configuration, interactive task item manager (add, delete, complete), and sound alarms. Includes defensive `try-catch` guards against opaque file origin browser storage crashes.
+2.  **Keyboard Speed Trainer (`keyboard.html`)**:
+    *   *Features*: Real-time WPM tracker, accuracy metric analysis, speed levels, character feedback highlight arrays, and interactive gameplay.
+3.  **3D WebGL Space Galaxy Sandbox (`space.html` / powered by the `three-js` skill)**:
+    *   *Features*: 2,000 particle starfield spiral galaxy, interactive center star core, mouse-drag camera orbit navigation via `OrbitControls`, and realistic lights.
+
+### Running the Test Suite
+
+To run the entire test suite, or target our new command runner JSON-serializability contract test:
+```bash
+# Run all tests
+uv run pytest
+
+# Run the command serialization test specifically
+uv run pytest tests/test_run_command_worker.py -v
+```
+
 ## Channel operation and proof
 
 GLC converts provider-specific payloads; S17 sees only the canonical envelope.
@@ -219,3 +261,44 @@ synthesis without readable sources.
 Provider adapters vary in how much live external delivery they implement. The
 connection proof establishes that every registered adapter reaches the S17 seam;
 it is not a claim that unconfigured Gmail, Twilio, or Slack accounts can send.
+
+---
+---
+
+## 🛠️ Assignment Bug Fixes & Feature Additions (S17Code)
+
+### 1. Command Result JSON Serialization Fix
+*   *Issue*: Running sandboxed command verification checks crashed the graph journal serialization with `TypeError: Object of type CommandResult is not JSON serializable`.
+*   *Solution*: Modified [s17code/workers/coding.py](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/s17code/workers/coding.py#L63-L66) to call `.as_dict()` on the command result.
+*   *Verification*: Run the contract test via: `uv run pytest tests/test_run_command_worker.py -v`.
+
+### 2. Research & UI Dashboard (Perplexity style) Synthesis Fix
+*   *Issue*: Under Mode 1 (Research & UI Dashboard), the small `gemini-3.1-flash-lite` planner used the generic `distiller` role instead of the schema-enforcing `content` role to synthesis results. Because the `distiller` role returns a flat string rather than structured JSON, it placed a fenced JSON block in the `summary` data model field, causing empty charts/tables.
+*   *Solution*: Updated [s17code/runtime.py](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/s17code/runtime.py#L400-L404) to make `distiller` and `summariser` capabilities **unavailable** when executing in UI mode. This forces the planner to route all research synthesis through the `content` role, ensuring the data model is parsed cleanly into individual fields (`sections`, `metrics`, `series`, `table`).
+
+### 3. Dedicated 3D Graphics & Animation Mode (Three.js)
+*   *Issue*: Support building high-fidelity WebGL graphics in the preview sandbox.
+*   *Solution*: 
+    *   Added `<option value="threejs">3D Graphics & Animation Builder (Three.js)</option>` to the launcher dropdown in [workspace.html](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/s17code/ui/client/workspace.html#L415).
+    *   Accepted the `"threejs"` value in [s17code/routes.py](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/s17code/routes.py#L40).
+    *   In [s17code/runtime.py](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/s17code/runtime.py#L420-L432), mapped `"threejs"` to `"text"` for the planner to reuse the coding worker loop, and force-enabled the `three-js` rendering skill along with the new modular `3d-actuators` and `3d-robots` skills as `always=True` (always-on) so the agent automatically inherits setup boilerplates and structural math definitions from the start of the run.
+
+### 4. Modular 3D Kinematics & Robotics Skills (`3d-actuators` & `3d-robots`)
+*   *Issue*: Separating general WebGL rendering guidelines from complex robotic joint chains and mechanical actuators to prevent token bloat and improve planner focus.
+*   *Solution*: Created two dedicated, modular skills:
+    *   **[3d-actuators](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/skills/3d-actuators/SKILL.md)**: Guides modeling stator/rotor BLDC motors, gears, working planetary gearboxes, and linear piston trigonometry (including component explosion sliders).
+    *   **[3d-robots](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/skills/3d-robots/SKILL.md)**: Guides hierarchical joint chains (hips/knees/shoulders/elbows), bipedal humanoid walking/arm-swing balance cycles, and quadruped (dog) trot walk gaits.
+
+
+### 5. Live Telemetry Preview File Resolution Fix
+*   *Issue*: When a coding run completed, the live sandbox iframe defaulted to reloading `"index.html"` rather than the newly generated `.html` page (e.g. `visualizer.html`), even though the file was written successfully.
+*   *Solution*: Patched `handleStreamEvent` in [s17code/ui/client/workspace.html](file:///home/mani_radhakrishnan/TSAI_EAGV3_Session17/S17Code/s17code/ui/client/workspace.html#L743-L751) to correctly extract the output parameters from flat `payload` fields (using `payload.result || payload`) during live `task_succeeded` events, ensuring `window.activePreviewFile` is updated in real-time.
+
+---
+
+## 👥 Division of Labor
+
+*   **AI Agent (Antigravity)**: Patched serialization bug, added the custom `three-js`, `3d-actuators`, and `3d-robots` skills, enabled capability filters to force structured content synthesis in UI mode, fixed live preview iframe file routing, updated modes in client workspace, and documented fixes/features in the README.
+*   **User**: Managed server deployment, configured the prompt controls, reported HTML rendering layout defects, proposed architectural skill isolation, and verified front-end preview components.
+
+

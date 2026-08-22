@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Piston Actuator</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; }
+        canvas { display: block; }
+        .reveal { opacity: 0; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(5, 10, 5);
+        light.castShadow = true;
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        const material = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.9, roughness: 0.1 });
+
+        const crankshaft = new THREE.Group();
+        const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.2, 32), material);
+        disc.rotation.x = Math.PI / 2;
+        disc.castShadow = true;
+        crankshaft.add(disc);
+        scene.add(crankshaft);
+
+        const pistonHead = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), material);
+        pistonHead.castShadow = true;
+        scene.add(pistonHead);
+
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 2, 16), material);
+        rod.castShadow = true;
+        scene.add(rod);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        camera.position.set(3, 3, 3);
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+            const t = time * 0.005;
+            crankshaft.rotation.z = t;
+            
+            const crankRadius = 0.5;
+            const x = Math.cos(t) * crankRadius;
+            const y = Math.sin(t) * crankRadius;
+            
+            pistonHead.position.y = 2 + y;
+            rod.position.set(x, 1 + y/2, 0);
+            rod.rotation.z = Math.atan2(y, x) - Math.PI/2;
+            
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate(0);
+    </script>
+</body>
+</html>

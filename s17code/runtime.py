@@ -389,7 +389,7 @@ class AgentRuntime:
         # on a KeyError, which reads as the agent being stupid rather than the
         # manifest being wrong.
         unavailable: set[str] = set()
-        if not os.getenv("S17_SANDBOX_ROOT"):
+        if not (os.getenv("S17_SANDBOX_ROOT") or os.getenv("S17_WORKSPACE")):
             unavailable |= {"read_file", "write_file", "copy_file", "file_sha256",
                             "list_directory", "index_file", "query_csv",
                             "create_calendar_events", "verify_artifact"}
@@ -397,6 +397,10 @@ class AgentRuntime:
             unavailable |= registry.family("coding")
         if self._skills() is None:
             unavailable |= {"load_skill"}
+        if respond_as != "ui":
+            unavailable |= {"compose_surface"}
+        else:
+            unavailable |= {"distiller", "summariser"}
 
         async def planning_llm(planning_prompt: str, system: str) -> dict[str, Any]:
             """The planner is a first-class metered model call, never a free seam."""
@@ -415,14 +419,25 @@ class AgentRuntime:
                          registry=registry, ledger=coding_ledger, transport=transport,
                          goal=restated_goal)
 
+        skills = self._skills()
+        if skills is not None:
+            if "a2ui" in skills:
+                skills.set_enabled("a2ui", respond_as == "ui")
+            for sk_name in ("three-js", "3d-actuators", "3d-robots"):
+                if sk_name in skills:
+                    is_three = (respond_as == "threejs")
+                    skills._skills[sk_name] = skills._replace(skills.get(sk_name), always=is_three, enabled=True)
+
+        planner_respond_as = "text" if respond_as == "threejs" else respond_as
+
         planner: Any = GeneralAgentPlanner(
-            planning_llm, registry, goal=restated_goal, respond_as=respond_as,
+            planning_llm, registry, goal=restated_goal, respond_as=planner_respond_as,
             allowed_side_effects=set(allowed_side_effects or ()),
             max_nodes=int(os.getenv("S17_MAX_GRAPH_NODES", "32")),
             max_new_tasks=int(os.getenv("S17_MAX_FRONTIER", "4")),
             initial_evidence=initial_evidence, unavailable=unavailable,
             max_repeat_failures=int(os.getenv("S17_MAX_REPEAT_FAILURES", "4")),
-            skills=self._skills(),
+            skills=skills,
         )
         # On a budgeted run the planner is wrapped so each new node
         # declares the tier its role needs and the allowance is re-divided across

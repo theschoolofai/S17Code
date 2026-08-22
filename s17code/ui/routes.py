@@ -96,6 +96,9 @@ async def snapshot(run_id: str, request: Request):
         "run_id": run_id,
         "event": state_snapshot(data_model),
         "component_count": len(built["components"]),
+        "finished": run["finished"],
+        "nodes": run["nodes"],
+        "events": run["events"],
     }
 
 
@@ -189,7 +192,10 @@ async def composed(run_id: str, request: Request):
     output), re-validated. Distinct from /surface, which is the run's progress
     view. This is what a UI-only app renders."""
     run = _read_run(request, run_id)
-    node = run["nodes"].get("surface") or {}
+    node = next(
+        (n for n in run.get("nodes", {}).values() if n.get("skill") == "compose_surface"),
+        run.get("nodes", {}).get("surface") or {}
+    )
     res = node.get("result") or {}
     surf = res.get("surface") or {}
     if not surf.get("components"):
@@ -243,3 +249,32 @@ async def app_viewer():
     if not path.exists():
         raise HTTPException(500, "app viewer missing")
     return path.read_text()
+
+
+@router.get("/workspace", response_class=HTMLResponse)
+@router.get("/workspace/", response_class=HTMLResponse)
+async def workspace_dashboard():
+    """The modern unified agent developer workspace dashboard."""
+    path = Path(__file__).parent / "client" / "workspace.html"
+    if not path.exists():
+        raise HTTPException(500, "workspace dashboard missing")
+    return path.read_text()
+
+
+@router.get("/workspace/preview/{path:path}", response_class=HTMLResponse)
+async def workspace_preview(path: str):
+    """Serve generated HTML/CSS/JS files from the S17_WORKSPACE directory statically for preview iframe."""
+    from s17code.coding.workspace import Workspace, WorkspaceError
+    try:
+        ws = Workspace.from_env()
+        resolved = ws.resolve(path)
+        if not resolved.is_file():
+            raise HTTPException(404, f"File {path} not found in workspace")
+        return HTMLResponse(resolved.read_text(encoding="utf-8"))
+    except HTTPException:
+        raise
+    except WorkspaceError as error:
+        raise HTTPException(400, f"Workspace configuration error: {error}. Please ensure the server is run with S17_WORKSPACE configured (e.g., S17_WORKSPACE=sandbox).")
+    except Exception as error:
+        raise HTTPException(500, str(error))
+

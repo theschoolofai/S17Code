@@ -57,7 +57,7 @@ def to_agui_event(journal_event: dict) -> dict:
     seq = journal_event["sequence"]
     name = _KIND_TO_AGUI.get(kind, "CUSTOM")
 
-    base = {"type": name, "seq": seq, "source_kind": kind}
+    base = {"type": name, "seq": seq, "source_kind": kind, "payload": payload}
 
     if kind == "run_started":
         return {**base}

@@ -57,14 +57,14 @@ tiers:
     # body. That is the whole tier -> provider mapping: no Python edit needed to
     # change a provider, a model, a reasoning effort or a token ceiling.
     request:
-      provider: groq
-      model: openai/gpt-oss-120b
+      provider: gemini
+      model: gemini-3.1-flash-lite
       reasoning: "off"
       max_tokens: 512
       temperature: 0
     # Which row of pricing.yaml this tier is billed against. Defaults to the
     # request model when omitted.
-    price_model: openai/gpt-oss-120b
+    price_model: gemini-3.1-flash-lite
     # What the estimator assumes before the call returns, in tokens. Real usage
     # replaces this the moment the response lands.
     projected_input_tokens: 1200
@@ -83,13 +83,11 @@ tiers:
 
   frontier:
     request:
-      provider: github
-      model: openai/gpt-4.1
-      # gpt-4.1 has no thinking channel to switch off, so the dial is left
-      # alone here rather than sent and ignored.
+      provider: gemini
+      model: gemini-3.1-flash-lite
       max_tokens: 4096
       temperature: 0
-    price_model: openai/gpt-4.1
+    price_model: gemini-3.1-flash-lite
     projected_input_tokens: 6000
     projected_output_tokens: 2000
 

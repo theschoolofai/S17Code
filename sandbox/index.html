@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shannon AI - Sana 2.5 Flash</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 800px; margin: auto; }
+        header { text-align: center; padding: 2rem 0; }
+        .card { border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-top: 20px; }
+        .price { font-size: 1.5rem; font-weight: bold; color: #007bff; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body class="hidden">
+    <div class="container">
+        <header>
+            <h1>Shannon AI</h1>
+            <p>Introducing <strong>Sana 2.5 Flash</strong></p>
+        </header>
+        <section class="card">
+            <h2>Model Capabilities</h2>
+            <ul>
+                <li>Ultra-low latency inference</li>
+                <li>High-throughput text processing</li>
+                <li>Advanced reasoning for real-time applications</li>
+            </ul>
+        </section>
+        <section class="card">
+            <h2>API Pricing</h2>
+            <p class="price">$0.05 per 1M tokens</p>
+            <p>Pay-as-you-go access via our developer portal.</p>
+        </section>
+    </div>
+    <script>
+        document.body.classList.remove('hidden');
+        try {
+            localStorage.getItem('test');
+        } catch (e) {}
+    </script>
+</body>
+</html>

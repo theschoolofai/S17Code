@@ -147,7 +147,25 @@ function tabs(c,x){const wrap=$("div");const nav=$("div","tabs");const body=$("d
   (String(c.labels||"").split(",")).forEach((lab,i)=>{const b=$("button");b.append(T(lab.trim()||("tab "+(i+1))));b.onclick=()=>show(i);nav.append(b);});
   if(tabIds.length)show(0);return wrap;}
 
-function render(surface){const byId={};surface.components.forEach(c=>byId[c.id]=c);const x={byId,dm:surface.dataModel||{}};const m=document.getElementById("mount");m.textContent="";m.append(node(byId[surface.root],x));}
+function render(surface){
+  const byId={};
+  surface.components.forEach(c=>byId[c.id]=c);
+  if(!surface.root || !byId[surface.root]){
+    surface.root = "root";
+    const parented = new Set();
+    surface.components.forEach(c=>{
+      if(c.children) c.children.forEach(id=>parented.add(id));
+    });
+    const rootChildren = surface.components
+      .filter(c=>!parented.has(c.id) && c.id!=="root")
+      .map(c=>c.id);
+    const syntheticRoot = {id:"root", type:"Column", children:rootChildren};
+    byId["root"] = syntheticRoot;
+    surface.components.push(syntheticRoot);
+  }
+  const x={byId,dm:surface.dataModel||{}};
+  const m=document.getElementById("mount");m.textContent="";m.append(node(byId[surface.root],x));
+}
 
 // ---- the app loop: a tap becomes the next turn ----
 function setStatus(html){document.getElementById("status").innerHTML=html;}

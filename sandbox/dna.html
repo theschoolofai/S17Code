@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DNA Double Helix</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #05050a; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.18"></script>
+</head>
+<body>
+<script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 15;
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    const config = { rotationSpeed: 0.01, basePairDistance: 0.5, starCount: 2000 };
+    const gui = new lil.GUI();
+    gui.add(config, 'rotationSpeed', 0, 0.05);
+    gui.add(config, 'basePairDistance', 0.2, 1.0);
+    gui.add(config, 'starCount', 500, 5000).step(100).onChange(initStars);
+
+    const helixGroup = new THREE.Group();
+    scene.add(helixGroup);
+
+    function createHelix() {
+        helixGroup.clear();
+        const materialCyan = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+        const materialMagenta = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+        const sphereGeo = new THREE.SphereGeometry(0.2, 16, 16);
+        
+        for (let i = 0; i < 40; i++) {
+            const angle = i * 0.5;
+            const x = Math.cos(angle) * 2;
+            const z = Math.sin(angle) * 2;
+            const y = (i - 20) * config.basePairDistance;
+
+            const s1 = new THREE.Mesh(sphereGeo, materialCyan);
+            s1.position.set(x, y, z);
+            helixGroup.add(s1);
+
+            const s2 = new THREE.Mesh(sphereGeo, materialMagenta);
+            s2.position.set(-x, y, -z);
+            helixGroup.add(s2);
+        }
+    }
+
+    let stars;
+    function initStars() {
+        if (stars) scene.remove(stars);
+        const geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(config.starCount * 3);
+        for (let i = 0; i < config.starCount * 3; i++) pos[i] = (Math.random() - 0.5) * 100;
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        stars = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.1, color: 0xffffff }));
+        scene.add(stars);
+    }
+
+    createHelix();
+    initStars();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        helixGroup.rotation.y += config.rotationSpeed;
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>

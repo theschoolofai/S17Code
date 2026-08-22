@@ -74,6 +74,17 @@ def validate_surface(surface: dict) -> ValidationResult:
     accepted: list[dict] = []
     rejections: list[Rejection] = []
     components = surface.get("components", [])
+    root_id = surface.get("root")
+    component_ids = {comp.get("id") for comp in components if comp.get("id")}
+
+    if not root_id:
+        rejections.append(
+            Rejection("<surface>", "root", Invariant.CATALOG, "surface root is not defined")
+        )
+    elif root_id not in component_ids:
+        rejections.append(
+            Rejection(root_id, "id", Invariant.CATALOG, f"surface root {root_id!r} is not defined in components list")
+        )
 
     for comp in components:
         cid = comp.get("id", "<no id>")
@@ -85,6 +96,17 @@ def validate_surface(surface: dict) -> ValidationResult:
                 Rejection(cid, "type", Invariant.CATALOG, f"unknown component type {ctype!r}")
             )
             continue
+
+        # Check child references
+        if "children" in comp:
+            children = comp["children"]
+            if isinstance(children, list):
+                for child_id in children:
+                    if child_id not in component_ids:
+                        rejections.append(
+                            Rejection(cid, "children", Invariant.CATALOG, f"referenced child {child_id!r} not found in components")
+                        )
+
 
         spec = COMPONENTS[ctype]
         bad = False

@@ -543,6 +543,9 @@ class GeneralAgentPlanner:
             "came from a channel, the terminal "
             "answer is automatically returned on that same channel and thread: do not discover channels, send a second "
             "message, or request approval merely to reply. Channel sending is only for a different proactive destination. "
+            "When the user requests to build, create, or implement a UI, page, website, or frontend, "
+            "you MUST write the code files (such as index.html) to the workspace using the create_file capability "
+            "instead of only describing them in a text response. "
             "The runtime, not you, owns completion and authority enforcement."
         )
 
