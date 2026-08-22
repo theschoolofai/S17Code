@@ -15,6 +15,16 @@ from typing import Any
 import httpx
 
 
+def _usage_int(body: dict[str, Any], key: str) -> int | None:
+    """Pass through a reported token count; do not invent 0 when the key is missing."""
+    if key not in body or body[key] is None:
+        return None
+    try:
+        return int(body[key])
+    except (TypeError, ValueError):
+        return None
+
+
 class GatewayClient:
     """A thin chat transport. Per-call request fields come from the caller's tier."""
 
@@ -88,10 +98,10 @@ class GatewayClient:
             "text": body.get("text", ""),
             "provider": body.get("provider"),
             "model": body.get("model"),
-            "input_tokens": body.get("input_tokens") or 0,
-            "output_tokens": body.get("output_tokens") or 0,
-            "cache_read_input_tokens": body.get("cache_read_input_tokens") or 0,
-            "cache_creation_input_tokens": body.get("cache_creation_input_tokens") or 0,
+            "input_tokens": _usage_int(body, "input_tokens"),
+            "output_tokens": _usage_int(body, "output_tokens"),
+            "cache_read_input_tokens": _usage_int(body, "cache_read_input_tokens") or 0,
+            "cache_creation_input_tokens": _usage_int(body, "cache_creation_input_tokens") or 0,
             "latency_ms": body.get("latency_ms"),
             "stop_reason": body.get("stop_reason"),
         }

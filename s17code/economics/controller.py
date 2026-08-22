@@ -64,6 +64,20 @@ class CallSite:
 _CALL_SITE: ContextVar[CallSite | None] = ContextVar("s17_call_site", default=None)
 
 
+def _usage_int(response: dict[str, Any], key: str) -> int | None:
+    """Token counts the gateway actually reported, or None if it omitted them.
+
+    ``int(value or 0)`` is the shape to avoid: it reads like metering and
+    behaves like a free call whenever the provider leaves the field off.
+    """
+    if key not in response or response[key] is None:
+        return None
+    try:
+        return int(response[key])
+    except (TypeError, ValueError):
+        return None
+
+
 @contextmanager
 def call_site(node_id: str, role: str, tier: str | None = None) -> Iterator[CallSite]:
     """Attribute every call made inside the block to one node."""
@@ -167,6 +181,16 @@ class BudgetedGateway:
         response = await self.transport.chat(prompt=prompt, system=system, request=body)
         latency_ms = (time.time() - started) * 1000.0
 
+        in_tok = _usage_int(response, "input_tokens")
+        out_tok = _usage_int(response, "output_tokens")
+        omitted = in_tok is None or out_tok is None
+        if omitted:
+            # A missing counter is not free. Bill the projection we already
+            # admitted, then refuse the result so an unmetered completion
+            # cannot be used as a successful node outcome.
+            in_tok = self.policy.estimate_input_tokens(prompt, system) if in_tok is None else in_tok
+            out_tok = decision.tier.max_output_tokens if out_tok is None else out_tok
+
         charge = self.budget.charge(
             node_id=site.node_id,
             role=site.role,
@@ -174,8 +198,8 @@ class BudgetedGateway:
             pricing=self.pricing,
             provider=response.get("provider"),
             model=response.get("model") or decision.tier.model,
-            input_tokens=int(response.get("input_tokens") or 0),
-            output_tokens=int(response.get("output_tokens") or 0),
+            input_tokens=int(in_tok),
+            output_tokens=int(out_tok),
             cache_read_tokens=int(response.get("cache_read_input_tokens") or 0),
             cache_write_tokens=int(response.get("cache_creation_input_tokens") or 0),
             projected_cost=decision.projected_cost,
@@ -192,6 +216,17 @@ class BudgetedGateway:
             "budget_pressure": self.budget.pressure,
         }
         site.calls.append(record)
+        if omitted:
+            detail = self.budget.record_refusal(
+                site.node_id, "gateway omitted usage",
+                {**decision.as_dict(), "charged_projection": True},
+            )
+            raise BudgetRefused(
+                f"gateway omitted usage for {site.node_id}; "
+                "charged the admission projection and refused the result",
+                node_id=site.node_id,
+                detail=detail,
+            )
         return {
             "text": response.get("text", ""),
             "provider": response.get("provider"),
