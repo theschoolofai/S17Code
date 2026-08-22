@@ -54,6 +54,9 @@ async def test_a_rewrite_that_drops_a_file_path_is_refused() -> None:
     ('the error says "connection reset by peer"', "Investigate the connection error."),
     ("revert commit a1b2c3d4e5f", "Revert the offending commit."),
     ("close out #482 this week", "Finish the outstanding issue."),
+    ("refund 5000 to acct-9", "process the refund"),
+    ("credit $9,000 to the ledger", "process the credit"),
+    ("email ops@bank.test when done", "notify the operator"),
 ])
 async def test_versions_quotes_shas_and_issue_numbers_all_survive_or_the_rewrite_is_refused(
     request_text: str, lossy: str
@@ -61,6 +64,20 @@ async def test_versions_quotes_shas_and_issue_numbers_all_survive_or_the_rewrite
     out = await QueryOptimizer(responds({"query": lossy})).optimize(request_text)
     assert out.rewritten is False, f"a rewrite silently dropped a literal from {request_text!r}"
     assert out.query == request_text
+
+
+def test_unquoted_amounts_emails_and_hyphen_ids_are_literals() -> None:
+    """Not the path-by-extension hole: 5000, $9,000, acct-9, an email.
+
+    A rewrite to 'process the refund' used to look like a better goal and
+    throw away the only numbers that said what to do.
+    """
+    from s17code.reasoning.jitrl import literals
+
+    held = literals("refund 5000 to acct-9 and email ops@bank.test about $9,000")
+    assert {"5000", "acct-9", "ops@bank.test", "$9,000"} <= held
+    assert literals("login is broken") == set()
+    assert literals("make it faster") == set()
 
 
 @pytest.mark.asyncio
