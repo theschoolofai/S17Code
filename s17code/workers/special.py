@@ -9,6 +9,7 @@ closures happened the first time.
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from typing import Any
 
 from s17code.core.live_graph import TaskSpec
@@ -17,6 +18,11 @@ from s17code.workers.context import RunContext
 from s17code.workers.parsing import _parse_json_object
 
 __all__ = ['run_validate_work', 'run_role', 'recall', 'remember_explicit']
+
+# Recursion bound for validators. A process-wide env var is the wrong
+# primitive: concurrent validations share it, so the second child is skipped
+# and (historically) reported ``passed: True``. A ContextVar is per-task.
+_VALIDATION_DEPTH: ContextVar[int] = ContextVar("s17_validation_depth", default=0)
 
 
 async def run_validate_work(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
@@ -30,16 +36,18 @@ async def run_validate_work(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
     """
     from s17code.coding.validate import VALIDATOR_SYSTEM, summarise, validator_goal
 
-    if int(os.getenv("_S17_VALIDATION_DEPTH", "0")) >= 1:
-        return {"summary": "validators do not spawn validators", "passed": True,
-                "findings": [], "skipped": True}
+    if _VALIDATION_DEPTH.get() >= 1:
+        # A skip is not a pass. Session 17's failure shape is a green check
+        # on a control that never ran.
+        return {"summary": "validators do not spawn validators", "passed": False,
+                "findings": [], "skipped": True, "blockers": 0, "reproduced_any": False}
 
     async def validator_llm(prompt: str, system: str) -> dict[str, Any]:
         # Replace only the planner's persona, so the child still returns
         # graph patches; the hostile brief rides along with the goal.
         return await ctx.llm(prompt, system)
 
-    os.environ["_S17_VALIDATION_DEPTH"] = "1"
+    depth = _VALIDATION_DEPTH.set(_VALIDATION_DEPTH.get() + 1)
     try:
         child = await ctx.runtime.run(
             prompt=validator_goal(task.input["requirement"],
@@ -52,7 +60,7 @@ async def run_validate_work(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
             transport=ctx.transport,
         )
     finally:
-        os.environ.pop("_S17_VALIDATION_DEPTH", None)
+        _VALIDATION_DEPTH.reset(depth)
 
     answer = (child.get("answer") or "").strip()
     parsed = _parse_json_object(answer) or {}
