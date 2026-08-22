@@ -384,6 +384,16 @@ async def get_trace(run_id: str, request: Request, endpoint: str | None = None):
     Same tape the UI streams as AG-UI events, read by a different consumer. With
     no exporter endpoint configured this still returns the full span tree — it
     simply sends nothing over the wire, so the route works with no collector.
+
+    The exporter URL is process configuration (``S17_OTEL_EXPORTER_ENDPOINT``),
+    never a request parameter: a query ``endpoint`` is how this route became
+    SSRF (the server would POST the journal to whichever URL the caller named).
     """
-    export = export_run(_journal(request.app.state.runtime, run_id), endpoint=endpoint)
+    if endpoint:
+        raise HTTPException(
+            400,
+            "exporter endpoint is configuration (S17_OTEL_EXPORTER_ENDPOINT), "
+            "not a request parameter",
+        )
+    export = export_run(_journal(request.app.state.runtime, run_id))
     return {"run_id": run_id, **export.as_dict()}

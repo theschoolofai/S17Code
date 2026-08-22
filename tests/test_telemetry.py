@@ -254,3 +254,40 @@ def test_an_empty_journal_still_produces_a_run_span():
     export = export_run({"run_id": "empty", "finished": False, "nodes": {}, "edges": (), "events": []})
     assert export.totals()["spans"] == 1
     assert export.totals()["provider_calls"] == 0
+
+
+def test_the_trace_route_does_not_export_to_a_caller_supplied_url(app_client, monkeypatch):
+    """GET /v1/agent/runs/{id}/trace?endpoint= used to wire OTLP to that URL.
+
+    The journal is unauthenticated observability; the exporter destination is
+    not. A query parameter that POSTs spans at 169.254.169.254 is SSRF.
+    """
+    monkeypatch.delenv("S17_OTEL_EXPORTER_ENDPOINT", raising=False)
+    wired: list[str] = []
+
+    def should_not_run(endpoint: str):
+        wired.append(endpoint)
+        raise AssertionError(f"must not export to {endpoint}")
+
+    monkeypatch.setattr("s17code.telemetry.spans._otlp_exporter", should_not_run)
+    runtime = app_client.app.state.runtime
+    runtime.graph.start("run-ssrf", context={
+        "prompt": "x",
+        "scope": {"tenant_id": "t", "project_id": None, "user_id": None,
+                  "agent_id": None, "run_id": None},
+        "source_uri": "api://agent/runs", "source_author": "api-user",
+    })
+    denied = app_client.get(
+        "/v1/agent/runs/run-ssrf/trace",
+        params={"endpoint": "http://169.254.169.254/latest/meta-data/"},
+    )
+    assert denied.status_code == 400
+    assert "S17_OTEL_EXPORTER_ENDPOINT" in denied.json()["detail"]
+    assert wired == []
+
+    ok = app_client.get("/v1/agent/runs/run-ssrf/trace")
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["exported_over_the_wire"] is False
+    assert body["endpoint"] is None
+    assert wired == []
