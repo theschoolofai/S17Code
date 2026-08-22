@@ -26,6 +26,9 @@ DEFAULT_PROTECTED = (
     "tests/**", "test/**", "**/tests/**", "**/test_*.py", "**/*_test.py",
     "conftest.py", "**/conftest.py",
     "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", ".github/**",
+    # The workspace git metadata is not the work. A hook planted here runs
+    # unbounded on `git commit`, which the allowlist otherwise permits.
+    ".git/**", "**/.git/**",
 )
 
 

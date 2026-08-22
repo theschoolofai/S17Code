@@ -52,6 +52,30 @@ def test_ordinary_source_is_editable(repo) -> None:
     assert is_protected("calc.py") is None
 
 
+def test_git_metadata_is_the_judge_not_the_work(repo) -> None:
+    """A hook in `.git` is a shell the allowlist thought it had closed."""
+    assert is_protected(".git/hooks/pre-commit") == ".git/**"
+    assert is_protected("vendor/pkg/.git/hooks/post-commit") == "**/.git/**"
+    with pytest.raises(GuardError, match="protected pattern"):
+        create_file(repo, EditLedger(), ".git/hooks/pre-commit",
+                    content="#!/bin/sh\necho pwned > pwned\n")
+
+
+def test_git_commit_does_not_run_a_planted_hook(repo) -> None:
+    """Defense in depth: even a hook that already exists must not execute."""
+    hook = repo.root / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho pwned > pwned\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo.root, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo.root, check=True)
+    (repo.root / "calc.py").write_text("x = 1\n", encoding="utf-8")
+    added = run_command(repo, ["git", "add", "calc.py"], timeout=20)
+    assert added.ok
+    committed = run_command(repo, ["git", "commit", "-m", "change"], timeout=20)
+    assert committed.ok, committed.stderr
+    assert not (repo.root / "pwned").exists()
+
+
 # --------------------------------------------------------------- the two preconditions
 
 def test_editing_a_file_this_run_has_not_read_is_refused(repo) -> None:

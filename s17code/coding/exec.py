@@ -122,6 +122,10 @@ def run_command(workspace: Workspace, command: str | list[str], *,
     """Run one allowlisted command inside the workspace, bounded."""
     argv = shlex.split(command) if isinstance(command, str) else list(command)
     _check(argv)
+    # `_check` refuses agent-supplied `git -c`, so the harness injects this
+    # after the check: hooks from `.git/hooks` must not become a shell.
+    if os.path.basename(argv[0]) == "git":
+        argv = [argv[0], "-c", "core.hooksPath=", *argv[1:]]
     timeout = max(1, min(int(timeout), MAX_TIMEOUT))
 
     if os.getenv("S17_EXEC_CONTAINER", "").strip() == "1":
