@@ -159,8 +159,15 @@ async function runTurn(userText){
   setStatus('<span class="pill think">composing…</span> the agent is writing an interface for: "'+userText+'"');
   const goal = convo.length===1 ? convo[0]
      : convo[0] + "\nSo far the user then picked: " + convo.slice(1).join(", then ") + ".\nRespond with the next interface for that.";
-  const res = await fetch(API+"/v1/agent/runs",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({prompt:goal, respond_as:"ui", tenant_id:"course", project_id:"s14", user_id:"viewer", agent_id:"app"})});
+  // /v1/agent/runs is bearer-gated and that bearer is a SERVER-side secret: it
+  // unlocks budget and allowed_side_effects, and setStatus() below writes model
+  // text through innerHTML, so anything this script can read a poisoned surface
+  // can post away. The page therefore holds no credential at all - it calls the
+  // server's own narrower route and the browser attaches the HttpOnly cookie
+  // that GET /app set. Scope, budget and side-effects are fixed server-side.
+  const res = await fetch(API+"/app/runs",{method:"POST",credentials:"same-origin",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({prompt:goal})});
+  if(!res.ok){ setStatus('<span class="pill">'+res.status+'</span> the app viewer is disabled on this server (set S17_APP_VIEWER=1)'); return; }
   const run = await res.json();
   const rid = run.run_id;
   const c = await (await fetch(API+"/v1/runs/"+rid+"/composed")).json();

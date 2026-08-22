@@ -24,16 +24,33 @@ class GatewayClient:
         "auto_route", "cache_system", "response_format", "agent", "session",
     )
 
+    #: The gateway gives each upstream provider 180s (glc/providers.py). Waiting
+    #: less than that here means abandoning calls the gateway is still legitimately
+    #: waiting on: the socket closes mid-read, the caller sees a transport error
+    #: rather than a provider error, and — because a planning call is what usually
+    #: takes that long — the graph is left with no answer node and the run ends
+    #: having produced nothing. Any value here must exceed the gateway's own
+    #: ceiling, with headroom for the queueing that makes a call slow to begin with.
+    UPSTREAM_CEILING_SECONDS = 180.0
+    DEFAULT_TIMEOUT_SECONDS = 240.0
+
     def __init__(self, base_url: str | None = None, *, client: httpx.AsyncClient | None = None) -> None:
         self.base_url = (base_url or os.getenv("GLC_BASE_URL", "http://127.0.0.1:8111")).rstrip("/")
-        self._client = client or httpx.AsyncClient(timeout=120)
+        timeout = float(os.getenv("S17_GATEWAY_TIMEOUT", self.DEFAULT_TIMEOUT_SECONDS))
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout))
         self._owns_client = client is None
 
     def _payload(self, prompt: str, system: str, request: dict[str, Any] | None) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
             "system": system,
-            "max_tokens": 1600,
+            # A ceiling, not a target. 1600 is comfortable for a paragraph answer
+            # and too tight for a STRUCTURED one: a run that must emit prose plus
+            # a citation block plus a coverage section can exhaust it mid-sentence,
+            # and a truncated answer loses precisely the trailing sections that
+            # made it checkable. No worker passes `request`, so before this was
+            # configurable the limit could not be raised without editing the file.
+            "max_tokens": int(os.getenv("S17_MAX_TOKENS", "1600")),
             "temperature": 0,
             "reasoning": "off",
             "agent": "s17_agent",

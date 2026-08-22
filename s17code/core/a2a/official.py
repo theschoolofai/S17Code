@@ -17,6 +17,11 @@ from s17code.core.live_graph import GraphPatch, NodeState
 
 from .server import A2ADemoServer, TaskState
 
+#: Declared in WIRE terms on purpose. The subscription loop below must be able to
+#: decide "we are done" from the snapshot it actually sent, and comparing against
+#: the local TaskState enum would mean re-reading the live task instead.
+_TERMINAL_STATES = {p.TASK_STATE_COMPLETED, p.TASK_STATE_FAILED, p.TASK_STATE_CANCELED}
+
 
 def _task(task) -> p.Task:
     stamp = Timestamp(); stamp.FromDatetime(datetime.now(UTC))
@@ -79,9 +84,18 @@ class OfficialA2AServicer(pb_grpc.A2AServiceServicer):
         await self._auth(context)
         task=self.core.tasks.get(request.id)
         if not task: await context.abort(grpc.StatusCode.NOT_FOUND,"task not found")
-        yield p.StreamResponse(task=_task(task))
-        while task.state not in {TaskState.COMPLETED,TaskState.FAILED,TaskState.CANCELED}:
-            await asyncio.sleep(.02); yield p.StreamResponse(task=_task(task))
+        while True:
+            snapshot=_task(task)
+            yield p.StreamResponse(task=snapshot)
+            # Terminate on the snapshot just sent, never on a fresh read of
+            # task.state. `task` is the same mutable object the completion job
+            # mutates, and this generator is suspended at the yield above for as
+            # long as the consumer takes to ask for the next item. Re-reading
+            # closed the stream whenever the task finished inside that window,
+            # leaving the subscriber's last event saying "working" for a task
+            # that had completed — a wire-protocol lie, not a timing nuisance.
+            if snapshot.status.state in _TERMINAL_STATES: return
+            await asyncio.sleep(.02)
     async def CreateTaskPushNotificationConfig(self, request, context): await self._auth(context); return self.pushes.put(request)
     async def GetTaskPushNotificationConfig(self, request, context):
         await self._auth(context)

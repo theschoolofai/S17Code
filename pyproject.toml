@@ -19,6 +19,12 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27",
     "ddgs>=9,<10",
     "networkx>=3.6,<4",
+    # zoneinfo reads the SYSTEM IANA database, and Windows does not ship one, so
+    # current_datetime(timezone=...) raises ZoneInfoNotFoundError for every named
+    # zone on a Windows install. tests/test_general_tools.py already asserts
+    # Asia/Kolkata resolves, so the capability is tested but the data it needs was
+    # never declared.
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

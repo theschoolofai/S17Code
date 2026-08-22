@@ -9,7 +9,13 @@ import pytest
 from a2a.types import a2a_pb2 as p
 from a2a.types import a2a_pb2_grpc as pb_grpc
 
-from s17code.core.a2a.official import A2AGraphBridge, GraphA2ARemote, OfficialA2AServer
+from s17code.core.a2a.official import (
+    A2AGraphBridge,
+    DurablePushConfigs,
+    GraphA2ARemote,
+    OfficialA2AServer,
+    OfficialA2AServicer,
+)
 from s17code.core.a2a.schema import AgentCardError, negotiate_interface, validate_agent_card
 from s17code.core.a2a.server import A2ADemoServer
 from s17code.core.live_graph import GraphPatch, GraphStore, LiveGraphExecutor, TaskSpec
@@ -154,6 +160,11 @@ async def test_official_subscription_resumes_waiting_graph_and_maps_cancel(tmp_p
         done = await runner.run("remote-run", resume=True)
         assert done.finished and store.snapshot("remote-run").nodes["remote"]["result"]["remote_task_id"] == final.id
 
+        # The remote must still be in flight when the cancel lands. The default
+        # 80ms auto-completion is shorter than the two SQLite commits below, so
+        # leaving it in place makes this half a coin flip: cancel() takes its
+        # terminal-state early-out and hands back COMPLETED instead of CANCELED.
+        core.task_delay = 30
         parked = await runner.run("cancel-run")
         dispatch = asyncio.create_task(bridge.dispatch_waiting(store, "cancel-run", "remote", request))
         for _ in range(30):
@@ -168,3 +179,33 @@ async def test_official_subscription_resumes_waiting_graph_and_maps_cancel(tmp_p
         assert store.node_state("cancel-run", "remote") == "cancelled"
     finally:
         store.close(); await channel.close(); await server.stop(); await core.close()
+
+
+@pytest.mark.asyncio
+async def test_subscription_last_event_is_terminal_when_task_finishes_mid_yield(tmp_path):
+    """A subscriber's last event must be the terminal snapshot, not a stale one.
+
+    Driven by hand rather than over gRPC, so the window that used to be hit
+    roughly a quarter of the time is hit every time: complete the task while the
+    generator is parked on its yield, then keep reading.
+    """
+    core = A2ADemoServer(card())
+    # No transport auth is configured, so the servicer never touches the context.
+    servicer = OfficialA2AServicer(core, DurablePushConfigs(tmp_path / "push.sqlite"))
+    try:
+        wire = await core.send(params("slow remote report"))
+        task = core.tasks[wire["id"]]
+        stream = servicer.SubscribeToTask(p.SubscribeToTaskRequest(id=task.id), None)
+        first = await stream.__anext__()
+        assert first.task.status.state == p.TASK_STATE_WORKING
+
+        # Completion lands while the generator is suspended on that yield — the
+        # exact window the background completion job hits on a bad run.
+        await core._complete(task)
+
+        seen = [first.task.status.state]
+        async for event in stream:
+            seen.append(event.task.status.state)
+        assert seen[-1] == p.TASK_STATE_COMPLETED
+    finally:
+        await core.close()

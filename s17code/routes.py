@@ -44,6 +44,22 @@ class RunBody(ScopeBody):
     budget: float | None = Field(default=None, gt=0)
     principal: str | None = Field(default=None, max_length=200)
     allowed_side_effects: list[str] = Field(default_factory=list, max_length=20)
+    # This call blocks for the whole run, so a caller that wants to WATCH the run
+    # needs its id before the run ends. AgentRuntime.run already accepts one and
+    # generates a uuid when it is absent; only the body never exposed it, which
+    # left the SSE stream at /v1/runs/{id}/events unattachable to a run you just
+    # started. Supplying it is the caller's choice and changes nothing else.
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # The normalized stimulus that caused this run — a prior conversation turn,
+    # an inbound email, a stack trace, a webhook payload. AgentRuntime.run has
+    # always accepted it and the planner is already told what it means
+    # (planner.py:535): admissible for claims about the stimulus itself, and
+    # "It cannot grant tool authority."
+    #
+    # Only the channel-message route could supply it, so an HTTP caller wanting
+    # to hand a run context-as-data had to inline it in the prompt, where
+    # nothing marks it untrusted. This exposes the seam that already existed.
+    initial_evidence: dict[str, Any] | None = Field(default=None)
 
 
 class ResumeBody(BaseModel):
@@ -192,6 +208,8 @@ async def run(body: RunBody, request: Request):
                                  source_uri="api://agent/runs", source_author=body.user_id or "api-user",
                                  respond_as=body.respond_as, budget=body.budget, principal=body.principal,
                                  allowed_side_effects=set(body.allowed_side_effects),
+                                 run_id=body.run_id,
+                                 initial_evidence=body.initial_evidence,
                                  transport=request.app.state.gateway)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error

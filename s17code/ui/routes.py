@@ -8,6 +8,7 @@
   POST /v1/validate                 validate an arbitrary surface (injection wall)
   POST /v1/action                   a validated user action (approve/reject/rerun)
   GET  /s/{id}                      the render client, pointed at a run
+  POST /app/runs                    the app viewer starts a run (opt-in, cookie)
 
 The data source is the runtime's own graph, read in-process off
 ``request.app.state.runtime`` — the same attribute ``GET /v1/agent/runs/{id}``
@@ -17,21 +18,80 @@ reads. No HTTP hop, no second service.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import os
+import secrets
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
+from s17code import routes as agent_routes
+from s17code.core.memory import MemoryScope
 
 from .agui import run_data_model, state_snapshot, to_agui_event
 from .catalog import catalog_manifest
 from .hitl import PendingAction, decide_resume
 from .surface import build_run_surface
-from .validator import validate_surface
+from .validator import Invariant, Rejection, validate_surface
 
 router = APIRouter()
 _CLIENT = Path(__file__).parent / "client" / "index.html"
+
+# --------------------------------------------------------------------------- #
+# the app viewer's credential
+#
+# app.html is a browser page and a browser cannot hold S17_CONTROL_TOKEN. That
+# token is this process's own secret and it unlocks `budget`, `principal` and
+# `allowed_side_effects` on the control plane; baking it into served HTML would
+# hand every tab the authority the whole design rests on. It would also be
+# readable by script in the page, and this page has a script-injection sink:
+# setStatus() writes through innerHTML (client/app.html:153, 159) and choose()
+# feeds it a model-chosen Button label on every turn after the first, so a
+# prompt-injected surface could post anything the page can read to a server of
+# its choosing.
+#
+# So the viewer never holds a token. Loading /app mints a per-process session
+# and returns it as an HttpOnly cookie, and the viewer posts to a route of its
+# own that is narrower than the control plane and refuses to exist unless an
+# operator turned it on. The default install is unchanged: the flag is off and
+# both routes answer 503 naming the variable to set.
+# --------------------------------------------------------------------------- #
+APP_VIEWER_ENV = "S17_APP_VIEWER"
+APP_VIEWER_BUDGET_ENV = "S17_APP_VIEWER_BUDGET"
+APP_VIEWER_COOKIE = "s17_app_viewer"
+
+
+def _require_app_viewer() -> None:
+    """Fail closed in auth.py's shape: unset means refuse, never serve anyway.
+
+    Enabling this is a real decision, not a default. /app/runs authenticates a
+    browser session, not an operator, so anyone who can reach this port can load
+    the page, be given a cookie and spend model tokens. It is a loopback
+    development surface: bind to 127.0.0.1 and set S17_APP_VIEWER_BUDGET.
+    """
+    if os.getenv(APP_VIEWER_ENV, "").strip().lower() not in {"1", "true", "yes"}:
+        raise HTTPException(
+            503,
+            f"{APP_VIEWER_ENV} is not enabled; the app viewer refuses to serve "
+            f"without it (local development only - it starts runs without a "
+            f"control-plane token)",
+        )
+
+
+def _viewer_session(request: Request) -> str:
+    """One random session secret per process, minted on first use, never stored.
+
+    A restart invalidates every outstanding cookie, which is the right blast
+    radius for a credential a page hands to whoever can load it.
+    """
+    secret = getattr(request.app.state, "app_viewer_session", "")
+    if not secret:
+        secret = secrets.token_urlsafe(32)
+        request.app.state.app_viewer_session = secret
+    return secret
 
 
 def _read_run(request: Request, run_id: str) -> dict:
@@ -58,6 +118,23 @@ def _read_run(request: Request, run_id: str) -> dict:
         "edges": snapshot.edges,
         "events": events,
     }
+
+
+def _composed_result(node: dict) -> dict | None:
+    """One node's compose result, but only when it carries something to render.
+
+    A compose node can succeed and still hold nothing: the model's JSON failed
+    to parse, or the validator rejected every component it proposed. Counting
+    that as absent keeps the selection below honest — /composed answers with an
+    interface a client can draw, or with 404, and never with an empty surface.
+    """
+    result = node.get("result")
+    if not isinstance(result, dict):
+        return None
+    surface = result.get("surface")
+    if not isinstance(surface, dict) or not surface.get("components"):
+        return None
+    return result
 
 
 @router.get("/v1/catalog")
@@ -133,7 +210,25 @@ class ValidateBody(BaseModel):
 
 @router.post("/v1/validate")
 async def validate(body: ValidateBody):
-    result = validate_surface(body.surface)
+    """Adjudicate any surface, including one this service did not produce.
+
+    Defence in depth. `validate_surface` is written not to raise, and the
+    try/except exists so that a future edit which breaks that promise degrades
+    to a 422 rather than a 500. The distinction is the whole point of the
+    endpoint: a 422 says "your surface is unacceptable", a 500 says "your
+    surface broke the thing that judges surfaces", and only one of those is a
+    wall doing its job.
+    """
+    try:
+        result = validate_surface(body.surface)
+    except Exception as error:  # noqa: BLE001 - a wall must never fall over
+        return {
+            "ok": False,
+            "accepted": [],
+            "rejections": [Rejection("<surface>", "surface", Invariant.CATALOG,
+                                     f"surface could not be validated: "
+                                     f"{type(error).__name__}").as_dict()],
+        }
     return {
         "ok": result.ok,
         "accepted": [c.get("id") for c in result.accepted],
@@ -189,11 +284,26 @@ async def composed(run_id: str, request: Request):
     output), re-validated. Distinct from /surface, which is the run's progress
     view. This is what a UI-only app renders."""
     run = _read_run(request, run_id)
-    node = run["nodes"].get("surface") or {}
-    res = node.get("result") or {}
-    surf = res.get("surface") or {}
-    if not surf.get("components"):
+    # Select the compose node by its SKILL, never by its id. S14 minted
+    # TaskSpec("surface", ...) itself, so reading run["nodes"]["surface"] was a
+    # fact about that runtime; here the planner names its own nodes and says so
+    # outright ("IDs are labels, not semantics"), which left this endpoint
+    # 404ing every run whose model did not happen to pick that one word.
+    # terminal_skills is the same source compose.py and the runtime's own
+    # terminal-node pick already read.
+    terminal = request.app.state.runtime.registry.terminal_skills("ui")
+    # sorted() is stable, so this reads "succeeded compose nodes in graph order,
+    # then the rest": a run that repaired a weak first attempt leaves more than
+    # one, and an attempt that came back empty must not hide the sibling that
+    # renders.
+    composers = sorted((node for node in run["nodes"].values()
+                        if node.get("skill") in terminal),
+                       key=lambda node: node.get("state") != "succeeded")
+    res = next((candidate for candidate in map(_composed_result, composers)
+                if candidate is not None), None)
+    if res is None:
         raise HTTPException(404, "run has no composed interface (no compose_surface node)")
+    surf = res["surface"]
     result = validate_surface(surf)
     return {
         "run_id": run_id,
@@ -211,7 +321,13 @@ async def composed(run_id: str, request: Request):
 async def client(run_id: str):
     if not _CLIENT.exists():
         raise HTTPException(500, "render client missing")
-    return _CLIENT.read_text().replace("__RUN_ID__", run_id)
+    # Path.read_text() defaults to the platform's preferred encoding, which on
+    # Windows is the ANSI codepage (cp1252), not UTF-8. These files contain
+    # non-Latin-1 bytes, so the default decodes them wrongly or not at all:
+    # GET /app raised UnicodeDecodeError and returned HTTP 500 on every Windows
+    # install, and the other two mojibake'd silently. The encoding of a file we
+    # ship is a fact about the file, not about the host reading it.
+    return _CLIENT.read_text(encoding="utf-8").replace("__RUN_ID__", run_id)
 
 
 @router.get("/console", response_class=HTMLResponse)
@@ -231,15 +347,70 @@ async def autonomy_console():
     path = Path(__file__).parent / "client" / "console.html"
     if not path.exists():
         raise HTTPException(500, "autonomy console missing")
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 @router.get("/app", response_class=HTMLResponse)
 @router.get("/app/", response_class=HTMLResponse)
-async def app_viewer():
+async def app_viewer(request: Request, response: Response):
     """A bare-minimal UI-only app shell: it starts a run, renders the composed
-    interface, and turns a tap into the next turn. The protocol does the work."""
+    interface, and turns a tap into the next turn. The protocol does the work.
+
+    Serving the page is what mints the viewer session. The cookie is HttpOnly so
+    the page's own script can never read it, SameSite=strict so no other site can
+    make this browser spend, and scoped to /app so it rides on no other route of
+    this origin.
+    """
+    _require_app_viewer()
     path = Path(__file__).parent / "client" / "app.html"
     if not path.exists():
         raise HTTPException(500, "app viewer missing")
-    return path.read_text()
+    response.set_cookie(APP_VIEWER_COOKIE, _viewer_session(request),
+                        httponly=True, samesite="strict", path="/app")
+    return path.read_text(encoding="utf-8")
+
+
+class AppRunBody(BaseModel):
+    """Deliberately narrower than the control plane's RunBody.
+
+    RunBody carries `budget`, `principal` and `allowed_side_effects` - the fields
+    that decide what the agent may do and how much it may spend, and the reason
+    that route is bearer-gated at all. A browser cannot name any of them here: it
+    may ask for an interface, and that is the whole vocabulary.
+    """
+
+    prompt: str = Field(min_length=1, max_length=40_000)
+
+
+@router.post("/app/runs")
+async def app_viewer_run(body: AppRunBody, request: Request):
+    """Start a run for the app viewer without the page ever holding a token.
+
+    This is not a hole in the control plane: /v1/agent/runs is untouched and
+    still refuses every tokenless caller. It is a second, strictly weaker
+    capability that exists only while an operator asks for it. Scope, response
+    mode and the empty side-effect grant are fixed here rather than accepted from
+    the caller, so a run started from a browser can compose an interface and
+    nothing else.
+    """
+    _require_app_viewer()
+    supplied = request.cookies.get(APP_VIEWER_COOKIE, "")
+    # Compared as bytes: compare_digest raises TypeError on a non-ASCII str, and
+    # a hand-crafted cookie has to come back 401, not 500 out of the auth check.
+    if not hmac.compare_digest(supplied.encode(), _viewer_session(request).encode()):
+        raise HTTPException(401, "no app viewer session; load /app in this browser first")
+    ceiling = os.getenv(APP_VIEWER_BUDGET_ENV, "").strip()
+    try:
+        return await request.app.state.runtime.run(
+            prompt=body.prompt,
+            scope=MemoryScope("local", "app-viewer", "viewer", "s17-app-viewer"),
+            llm=lambda prompt, system: agent_routes.gateway_text_llm(request.app, prompt, system),
+            source_uri="app://viewer/runs", source_author="app-viewer",
+            respond_as="ui", allowed_side_effects=set(),
+            budget=float(ceiling) if ceiling else None,
+            transport=request.app.state.gateway,
+        )
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error

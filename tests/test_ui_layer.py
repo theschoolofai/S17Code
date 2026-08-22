@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from s17code.capabilities import default_registry
 from s17code.ui.agui import (
     empty_state,
     replay_state,
@@ -469,7 +470,9 @@ class _PopulatedGraph:
 class _PopulatedRuntime:
     def __init__(self, run_id: str, run: dict):
         self.graph = _PopulatedGraph(run_id, run)
-
+        # The real runtime owns exactly one registry and the routes read it off
+        # the runtime; a fake without one is not standing in for the runtime.
+        self.registry = default_registry()
 
 @pytest.fixture(scope="module")
 def live_client(recorded_run) -> TestClient:
@@ -531,9 +534,89 @@ def test_route_reconnect_snapshot_rebuild_equals_full_replay(live_client):
 
 
 # --------------------------------------------------------------------------- #
-# render client — source-level safety property (no innerHTML from bound data)
+# routes — /composed selects the compose node by SKILL, not by node id
 # --------------------------------------------------------------------------- #
 
+# Read from the same registry the route reads. A test that hard-coded
+# "compose_surface" would keep passing for the wrong reason if the capability
+# were renamed, and coupling to a name is the whole bug being closed here.
+_COMPOSE_SKILL = sorted(default_registry().terminal_skills("ui"))[0]
+
+
+def _compose_node(node_id: str, *, state: str = "succeeded", title: str = "Report") -> dict:
+    """One compose_surface node in the shape GraphStore.snapshot() emits."""
+    surface = {"root": "root", "dataModel": {"title": title}, "components": [
+        {"id": "root", "type": "Column", "children": ["h"]},
+        {"id": "h", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}}]}
+    return {"id": node_id, "skill": _COMPOSE_SKILL, "input": {},
+            "metadata": {"agent": "ui_composer"}, "state": state,
+            "result": {"agent": "ui_composer", "provider": "gemini", "model": "flash",
+                       "surface": surface, "data_model": {"title": title}}}
+
+
+def _composed_run(*nodes: dict) -> dict:
+    return {"finished": True, "edges": (), "events": [],
+            "nodes": {node["id"]: node for node in nodes}}
+
+
+def _composed_client(run: dict) -> TestClient:
+    app = FastAPI()
+    app.include_router(ui_router)
+    app.state.runtime = _PopulatedRuntime("cx", run)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("node_id", ["ui_1", "compose", "final_interface", "surface"])
+def test_composed_finds_the_compose_node_whatever_the_planner_named_it(node_id):
+    """The planner owns node ids and says so outright: IDs are labels, not
+    semantics. Reading run["nodes"]["surface"] was correct only in S14, where the
+    runtime minted that id itself; here it answered 404 for every other name."""
+    response = _composed_client(_composed_run(_compose_node(node_id))).get("/v1/runs/cx/composed")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["component_count"] == 2
+
+
+def test_composed_prefers_a_succeeded_compose_node_over_a_failed_earlier_one():
+    run = _composed_run(_compose_node("attempt_1", state="failed", title="Broken"),
+                        _compose_node("attempt_2", title="Good"))
+
+    body = _composed_client(run).get("/v1/runs/cx/composed").json()
+
+    assert body["surface"]["dataModel"]["title"] == "Good"
+
+
+def test_composed_skips_a_compose_node_that_produced_no_components():
+    """A parse failure leaves a succeeded node holding an empty surface. It must
+    not shadow the sibling attempt that actually renders."""
+    empty = _compose_node("attempt_1")
+    empty["result"]["surface"] = {"root": "root", "components": [], "dataModel": {}}
+    run = _composed_run(empty, _compose_node("attempt_2", title="Good"))
+
+    response = _composed_client(run).get("/v1/runs/cx/composed")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["surface"]["dataModel"]["title"] == "Good"
+
+
+def test_composed_is_404_when_the_run_composed_nothing(recorded_run):
+    """A genuinely absent surface stays a 404, and must not become a 500: the
+    recorded run is researcher / distiller / answer nodes and no compose node."""
+    assert _composed_client(recorded_run).get("/v1/runs/cx/composed").status_code == 404
+
+
+def test_composed_is_404_not_500_while_the_compose_node_is_still_running():
+    """result is None until the node finishes; selection must read that as
+    nothing-to-render-yet rather than walk into an AttributeError."""
+    run = _composed_run({"id": "ui_1", "skill": _COMPOSE_SKILL, "input": {}, "metadata": {},
+                         "state": "running", "result": None})
+
+    assert _composed_client(run).get("/v1/runs/cx/composed").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# render client — source-level safety property (no innerHTML from bound data)
+# --------------------------------------------------------------------------- #
 def test_render_client_never_uses_innerhtml_and_documents_the_contract():
     html = (_BUILD_ROOT / "s17code" / "ui" / "client" / "index.html").read_text()
     # The client draws every value through text nodes, never as markup.

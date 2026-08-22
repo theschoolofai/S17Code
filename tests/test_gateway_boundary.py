@@ -86,3 +86,48 @@ async def test_gateway_can_fall_back_without_exposing_credentials(monkeypatch):
 def test_s17code_does_not_reimplement_gateway_routes(app_client):
     assert app_client.post("/v1/chat", json={}).status_code == 404
     assert app_client.get("/v1/providers").status_code == 404
+
+
+class TestClientOutwaitsTheGateway:
+    """The caller must not give up before the callee can possibly answer.
+
+    The gateway allows each upstream provider 180s. This client used to wait
+    120s, so any completion slower than that was abandoned while the gateway
+    was still legitimately waiting on it. The socket closed mid-read, so the
+    caller saw a transport error (`httpx.ReadError`) instead of a provider
+    error — and because the calls that run long are usually PLANNING calls,
+    the graph was left without an answer node and the run finished having
+    produced nothing, with no reason attached to say why.
+
+    Observed against a live Gemini backend: planning completions returned in
+    5-90s depending on queueing, so the 120s ceiling failed intermittently,
+    which is the worst way for it to fail.
+    """
+
+    def test_default_timeout_exceeds_the_gateways_own_upstream_ceiling(self):
+        client = GatewayClient("http://gateway")
+
+        assert client._client.timeout.read is not None
+        assert client._client.timeout.read > GatewayClient.UPSTREAM_CEILING_SECONDS, (
+            "waiting less than the gateway's own upstream ceiling abandons calls "
+            "it is still waiting on")
+
+    def test_every_phase_of_the_timeout_is_raised_not_just_connect(self):
+        """A read timeout is the one that bites; a bare number sets all four,
+        so this guards against a future edit that raises only one."""
+        timeout = GatewayClient("http://gateway")._client.timeout
+
+        for phase in (timeout.read, timeout.write, timeout.pool):
+            assert phase is not None
+            assert phase > GatewayClient.UPSTREAM_CEILING_SECONDS
+
+    def test_the_ceiling_is_overridable_for_a_slower_backend(self, monkeypatch):
+        monkeypatch.setenv("S17_GATEWAY_TIMEOUT", "600")
+
+        assert GatewayClient("http://gateway")._client.timeout.read == 600.0
+
+    def test_an_injected_client_is_left_alone(self):
+        """Tests and callers that supply their own client keep its settings."""
+        supplied = httpx.AsyncClient(timeout=1.0)
+
+        assert GatewayClient("http://gateway", client=supplied)._client is supplied

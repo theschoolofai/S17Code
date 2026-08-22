@@ -9,6 +9,7 @@ closures happened the first time.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from s17code.core.live_graph import TaskSpec
@@ -16,7 +17,7 @@ from s17code.core.memory import MemoryKind, MemoryRecord, Principal
 from s17code.workers.context import RunContext
 from s17code.workers.parsing import _parse_json_object
 
-__all__ = ['run_validate_work', 'run_role', 'recall', 'remember_explicit']
+__all__ = ['run_validate_work', 'run_role', 'recall', 'run_retriever', 'remember_explicit']
 
 
 async def run_validate_work(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
@@ -34,9 +35,25 @@ async def run_validate_work(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
         return {"summary": "validators do not spawn validators", "passed": True,
                 "findings": [], "skipped": True}
 
+    from s17code.runtime import GROUNDED_ANSWER_SYSTEM
+
     async def validator_llm(prompt: str, system: str) -> dict[str, Any]:
-        # Replace only the planner's persona, so the child still returns
-        # graph patches; the hostile brief rides along with the goal.
+        # VALIDATOR_SYSTEM was imported here and then never delivered, so the
+        # child ran as an ordinary agent: no instruction not to trust that code
+        # existing means code runs, no instruction to reproduce a defect before
+        # reporting it, and — decisively — no instruction to return the JSON
+        # this function's own caller parses. `summarise()` reads `findings`,
+        # `severity` and `reproduced` out of that JSON, so with the brief
+        # missing the parse fell through to the `passed: False` fallback on
+        # every run. A validator that always fails is as useless as one that
+        # always passes.
+        #
+        # It is appended to the ANSWER call only. The planning calls keep the
+        # planner's persona untouched, because the child still has to emit graph
+        # patches, and a second "return JSON only" contract in that prompt would
+        # fight the first one.
+        if system == GROUNDED_ANSWER_SYSTEM:
+            system = f"{system}\n\n{VALIDATOR_SYSTEM}"
         return await ctx.llm(prompt, system)
 
     os.environ["_S17_VALIDATION_DEPTH"] = "1"
@@ -80,10 +97,35 @@ async def run_role(ctx: RunContext, task: TaskSpec, *, initial_evidence: Any) ->
     return output
 
 
+#: Which memory kinds `recall` will retrieve, overridable per deployment.
+#:
+#: EPISODE is included by default because a conversational agent should be able
+#: to remember what it said. It is exactly wrong for a document-QA workload: every
+#: answer is written back as an episode, so asking the same question repeatedly
+#: fills memory with near-perfect matches for itself. Recall is similarity-ranked
+#: and capped, so those episodes progressively crowd the actual documents out of
+#: the evidence. Measured on a ten-source notebook: reliable for the first several
+#: runs, then 11 evidence items of which most were prior answers, and runs that
+#: recalled and stopped without writing anything. A fresh notebook with identical
+#: sources succeeded 3/3 immediately afterwards.
+#:
+#: Set S17_RECALL_KINDS=fact,document_chunk,playbook to keep an agent from
+#: feeding on its own output.
+_DEFAULT_RECALL_KINDS = "fact,document_chunk,playbook,episode"
+
+
+def _recall_kinds() -> list[MemoryKind]:
+    names = [n.strip().lower() for n in
+             os.getenv("S17_RECALL_KINDS", _DEFAULT_RECALL_KINDS).split(",") if n.strip()]
+    kinds = [kind for kind in MemoryKind if kind.value.lower() in names]
+    # An unparseable setting must not silently disable retrieval altogether.
+    return kinds or [MemoryKind.FACT, MemoryKind.DOCUMENT_CHUNK,
+                     MemoryKind.PLAYBOOK, MemoryKind.EPISODE]
+
+
 async def recall(ctx: RunContext, task: TaskSpec, *, inbound_id: Any) -> dict[str, Any]:
     hits = ctx.runtime.memory.recall(
-        task.input["query"], ctx.scope, limit=24,
-        kinds=[MemoryKind.FACT, MemoryKind.DOCUMENT_CHUNK, MemoryKind.PLAYBOOK, MemoryKind.EPISODE],
+        task.input["query"], ctx.scope, limit=24, kinds=_recall_kinds(),
     )
     # Never let this very request (or the gateway's audit trail) pose
     # as evidence for its own answer.  Older episodes remain usable.
@@ -100,8 +142,36 @@ async def recall(ctx: RunContext, task: TaskSpec, *, inbound_id: Any) -> dict[st
         if len(diversified) == 8:
             break
     hits = sorted(diversified, key=lambda hit: 0 if hit.kind is MemoryKind.FACT else 1)
+    # `metadata` carries document_id, ordinal, heading and the chunk's character
+    # offsets into its source. Omitting it here made the same recall return
+    # strictly less inside the graph than over HTTP (routes.py does include it),
+    # so a node could name a chunk it had no way to point at — the offsets are
+    # exactly what turns a recalled span into a citation somebody can click.
     return {"hits": [{"id": hit.id, "kind": hit.kind.value, "text": hit.text,
-                       "sources": [source.uri for source in hit.sources]} for hit in hits]}
+                       "sources": [source.uri for source in hit.sources],
+                       "metadata": hit.metadata} for hit in hits]}
+
+
+async def run_retriever(ctx: RunContext, task: TaskSpec, *, inbound_id: Any) -> dict[str, Any]:
+    """Recall scoped memory, then have a specialist summarise only that.
+
+    It belongs here, beside `recall`, because it IS a recall and therefore needs
+    the same one extra value. It used to live in workers/general.py and call a
+    bare `recall(spec)` — a name that module never imported, one argument into
+    three — so this registered capability had never once run. The extraction
+    sorted it by how it looked (two parameters) rather than by what it needs.
+
+    `inbound_id` is not optional politeness: without it this run's own question,
+    written to memory as an episode before planning starts, is eligible as
+    evidence for its own answer.
+    """
+    hits = await recall(ctx, TaskSpec(task.id, "memory_recall",
+                                      {"query": task.input.get("query", ctx.goal)}),
+                        inbound_id=inbound_id)
+    result = await ctx.llm(json.dumps(hits),
+                           "You are the retriever role. Summarise only supplied scoped memory evidence.")
+    return {**hits, "text": result.get("text", ""), "provider": result.get("provider"),
+            "model": result.get("model"), "agent": task.skill}
 
 
 async def remember_explicit(ctx: RunContext, task: TaskSpec, *, user_source: Any) -> dict[str, Any]:

