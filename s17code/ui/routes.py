@@ -6,7 +6,9 @@
   GET  /v1/runs/{id}/events         AG-UI event stream over SSE
   GET  /v1/runs/{id}/composed       the interface the agent composed for a run
   POST /v1/validate                 validate an arbitrary surface (injection wall)
-  POST /v1/action                   a validated user action (approve/reject/rerun)
+  POST /v1/action                   a validated user action (approve/reject/rerun);
+                                    this is a write: it resumes parked work and
+                                    needs the control token, same as /resume
   GET  /s/{id}                      the render client, pointed at a run
 
 The data source is the runtime's own graph, read in-process off
@@ -20,9 +22,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
+from s17code.auth import require_control
 
 from .agui import run_data_model, state_snapshot, to_agui_event
 from .catalog import catalog_manifest
@@ -152,7 +156,7 @@ class ActionBody(BaseModel):
     pending_summary: str = ""
 
 
-@router.post("/v1/action")
+@router.post("/v1/action", dependencies=[Depends(require_control)])
 async def action(body: ActionBody, request: Request):
     try:
         node = request.app.state.runtime.graph.snapshot(body.run_id).nodes[body.node_id]
@@ -163,7 +167,10 @@ async def action(body: ActionBody, request: Request):
     wait = node["wait"]
     # The binding comes from the durable node, never from client-supplied
     # pending_params. Event payload cannot rewrite what the agent asked.
-    bound = wait.get("params") if isinstance(wait.get("params"), dict) else {}
+    # Missing params is not "approve whatever": that was an open door.
+    bound = wait.get("params")
+    if not isinstance(bound, dict) or not bound:
+        raise HTTPException(409, "parked node has no bound parameters; approval is refused")
     pending = PendingAction(body.run_id, body.node_id, str(wait.get("question", "")), bound)
     decision = decide_resume(pending, body.action, body.args)
     if not decision.allowed:
