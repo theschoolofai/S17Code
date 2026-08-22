@@ -133,12 +133,19 @@ def run_command(workspace: Workspace, command: str | list[str], *,
 
     import time
     started = time.monotonic()
+    cmd_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(workspace.root),
+                "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
+    # Windows requires these for DLL loading, sockets (Winsock), and temp files
+    for winvar in ("SYSTEMROOT", "COMSPEC", "TEMP", "TMP", "WINDIR", "USERPROFILE",
+                   "APPDATA", "LOCALAPPDATA", "SYSTEMDRIVE"):
+        if val := os.environ.get(winvar):
+            cmd_env[winvar] = val
+
     try:
         completed = subprocess.run(
             argv, cwd=workspace.root, capture_output=True, text=True,
             timeout=timeout, shell=False,            # never a shell
-            env={"PATH": os.environ.get("PATH", ""), "HOME": str(workspace.root),
-                 "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"},
+            env=cmd_env,
         )
         return CommandResult(
             argv, completed.returncode,
