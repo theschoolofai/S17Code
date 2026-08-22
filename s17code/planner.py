@@ -8,6 +8,7 @@ terminal semantics before a patch can reach the durable executor.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -24,6 +25,51 @@ _TERMINAL = {"succeeded", "failed", "cancelled"}
 
 class PlannerOutputError(ValueError):
     """The model's proposal was not a safe, executable next frontier."""
+
+
+#: The patch envelope, written down so a server that supports grammar-constrained
+#: decoding can make the wrong shape unrepresentable rather than merely rejected.
+#: This is not a second source of truth: it describes exactly the envelope
+#: :meth:`GeneralAgentPlanner._parse` already enforces, and `_parse` remains the
+#: boundary. A small instruction-tuned model reaches for the shape it was tuned
+#: on — gemma4 answered a planning prompt with ReAct's {"action","action_input"}
+#: four times running, choosing the right capability and the right arguments
+#: every time and losing the run on the envelope alone.
+PATCH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "add": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "capability": {"type": "string"},
+                    "arguments": {"type": "object"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["id", "capability", "arguments", "depends_on"],
+            },
+        },
+        "cancel": {"type": "array", "items": {"type": "string"}},
+        "finish": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["add", "cancel", "finish", "reason"],
+}
+
+#: The evidence critic answers a different question and therefore a different
+#: shape. Constraining it with the patch schema would be worse than not
+#: constraining it at all.
+REVIEW_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ready": {"type": "boolean"},
+        "missing": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"},
+    },
+    "required": ["ready", "missing", "reason"],
+}
 
 
 def _clip(value: Any, *, chars: int = 4_000, depth: int = 0) -> Any:
@@ -79,6 +125,8 @@ class GeneralAgentPlanner:
         unavailable: set[str] | None = None,
         max_repeat_failures: int = 4,
         skills: "SkillManager | None" = None,
+        structured_llm: "Callable[[str, str, dict[str, Any]], Awaitable[dict[str, Any]]] | None" = None,
+        allowed_capabilities: set[str] | None = None,
     ) -> None:
         if respond_as not in {"text", "ui"}:
             raise ValueError("respond_as must be text or ui")
@@ -98,8 +146,22 @@ class GeneralAgentPlanner:
         self.skills = skills
         self._loaded: list[str] = []
         self.initial_evidence = initial_evidence or {}
+        # None preserves the general-agent behaviour. A concrete set creates a
+        # least-capability agent profile: hidden tools are neither advertised
+        # nor accepted if a model guesses their name.
+        self.allowed_capabilities = (set(allowed_capabilities)
+                                     if allowed_capabilities is not None else None)
+        # When the gateway can constrain decoding to a schema, use it. Absent it
+        # the planner behaves exactly as before: free-form text into `_parse`.
+        self.structured_llm = structured_llm
         self.last_selection: dict[str, Any] = {"mode": "general_agent", "calls": 0}
         self.history: list[dict[str, Any]] = []
+
+    async def _ask(self, prompt: str, system: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """One model call, schema-constrained where the deployment allows it."""
+        if self.structured_llm is None:
+            return await self.llm(prompt, system)
+        return await self.structured_llm(prompt, system, schema)
 
     async def plan(self, graph: GraphSnapshot, event: Event) -> GraphPatch:
         terminal = self.registry.terminal_skills(self.respond_as)
@@ -130,6 +192,21 @@ class GeneralAgentPlanner:
                 "the work rather than fix it. What is being attempted is probably "
                 "not where the problem is."))
 
+        # The verification ceiling above watches the *ambiguous* case, where a
+        # command ran fine and returned a non-zero exit. The unambiguous case —
+        # a task that failed outright, with no exit code at all — was watched by
+        # nothing, so a capability that cannot work in this deployment was
+        # re-proposed until the graph node limit caught it: twenty-one planner
+        # calls, one error message, nothing learned.
+        dead = self._stuck_capability(graph)
+        if dead:
+            skill, times, error = dead
+            return GraphPatch(finish=True, reason=(
+                f"stopping: capability {skill!r} has failed {times} times with the same "
+                f"error and nothing about the attempt is changing: {error} "
+                "This is a property of the run's configuration or arguments, not "
+                "something another attempt discovers."))
+
         # A skill the run has already asked for stays in the system prompt for
         # the rest of the run. Derived from the graph rather than kept in a
         # variable, so a resumed run reloads exactly what the journal says it
@@ -148,7 +225,7 @@ class GeneralAgentPlanner:
         for attempt in range(self.repair_attempts + 1):
             request = prompt if error is None else self._repair_prompt(prompt, raw, error)
             try:
-                reply = await self.llm(request, self._system())
+                reply = await self._ask(request, self._system(), PATCH_SCHEMA)
             except Exception as problem:
                 meter = getattr(problem, "_s17_planner_meter", {}) or {}
                 metered_calls.extend(meter.get("metered_calls", []))
@@ -173,7 +250,8 @@ class GeneralAgentPlanner:
                 if self.review_terminal and any(
                     task.skill in self.registry.terminal_skills(self.respond_as) for task in patch.add
                 ):
-                    review_reply = await self.llm(self._review_prompt(graph), self._review_system())
+                    review_reply = await self._ask(self._review_prompt(graph), self._review_system(),
+                                                   REVIEW_SCHEMA)
                     review_meter = review_reply.pop("_s17_planner_meter", {}) or {}
                     metered_calls.extend(review_meter.get("metered_calls", []))
                     budget_decisions.extend(review_meter.get("budget_decisions", []))
@@ -212,6 +290,36 @@ class GeneralAgentPlanner:
         return GraphPatch(finish=not active, reason=f"planner failed validation after repair: {error}",
                           metadata={"metered_calls": metered_calls,
                                     "budget_decisions": budget_decisions})
+
+    def _stuck_capability(self, graph: GraphSnapshot) -> tuple[str, int, str] | None:
+        """Has one capability failed outright, the same way, too many times?
+
+        Keyed on skill *and* message, so a capability failing for genuinely
+        different reasons still gets its attempts. A later success with the same
+        skill forgives everything before it, exactly as a passing verification
+        does.
+        """
+        if self.max_repeat_failures <= 0:
+            return None
+        tally: dict[tuple[str, str], int] = {}
+        for node in graph.nodes.values():
+            skill = str(node["skill"])
+            if node["state"] == "succeeded":
+                for key in [key for key in tally if key[0] == skill]:
+                    tally.pop(key)
+                continue
+            if node["state"] != "failed":
+                continue
+            error = str((node.get("result") or {}).get("error", "")).strip()
+            if not error:
+                continue
+            key = (skill, error)
+            tally[key] = tally.get(key, 0) + 1
+        worst = max(tally.items(), key=lambda item: item[1], default=None)
+        if worst and worst[1] >= self.max_repeat_failures:
+            (skill, error), times = worst
+            return skill, times, error
+        return None
 
     def _stuck_verification(self, graph: GraphSnapshot) -> tuple[str, int] | None:
         """Has one verification command failed the same way too many times?"""
@@ -401,6 +509,19 @@ class GeneralAgentPlanner:
                 # into a wave barrier and reject valid agile expansion.
                 edges.append((parent, node_id))
             capability = self.registry.get(skill)
+            if self.allowed_capabilities is not None and skill not in self.allowed_capabilities:
+                raise PlannerOutputError(f"capability {skill!r} is outside this agent profile")
+            # Omitting an unconfigured capability from the manifest is a hint,
+            # not a boundary: the profile's own policy text is enough for a
+            # model to name one anyway.  Observed with no S17_SANDBOX_ROOT set —
+            # the planner proposed `list_directory` twenty-one times, each node
+            # died inside the worker, and the run read as a stupid agent rather
+            # than a misconfigured deployment.  Refuse it where every other
+            # authority question is answered.
+            if skill in self.unavailable:
+                raise PlannerOutputError(
+                    f"capability {skill!r} is not configured in this deployment"
+                )
             if capability.side_effect and skill not in self.allowed_side_effects:
                 raise PlannerOutputError(
                     f"side-effect capability {skill!r} lacks explicit run authority"
@@ -449,14 +570,20 @@ class GeneralAgentPlanner:
             "capabilities": [
                 capability
                 for capability in self.registry.manifest()
-                if (not capability["side_effect"]
+                if (self.allowed_capabilities is None
+                    or capability["name"] in self.allowed_capabilities)
+                and (not capability["side_effect"]
                     or capability["name"] in self.allowed_side_effects)
                 and capability["name"] not in self.unavailable
             ],
             # Level one of disclosure: a routing line per skill, never a body.
             # The planner cannot ask for what it has not been told exists.
             **({"skills_available": self.skills.listing()} if self.skills and self.skills.listing() else {}),
-            "authority": {"allowed_side_effects": sorted(self.allowed_side_effects)},
+            "authority": {
+                "allowed_side_effects": sorted(self.allowed_side_effects),
+                "allowed_capabilities": (sorted(self.allowed_capabilities)
+                                         if self.allowed_capabilities is not None else None),
+            },
             "limits": {"max_new_tasks_now": self.max_new_tasks,
                        "remaining_node_slots": self.max_nodes - len(graph.nodes)},
             "output_schema": {
@@ -475,7 +602,11 @@ class GeneralAgentPlanner:
     # the run reporting "only 6 questions were generated". It was counting what
     # survived truncation, and everything downstream of that was correct
     # reasoning about a mutilated input.
-    REVIEW_CLIP_CHARS = 60_000
+    # Sized for a hosted context window. A local model's window is measured in
+    # thousands of tokens, and a review prompt that overruns it comes back empty
+    # rather than wrong — so this is a bound, and every other bound here is
+    # configurable.
+    REVIEW_CLIP_CHARS = int(os.getenv("S17_REVIEW_CLIP_CHARS", "60000"))
 
     def _review_prompt(self, graph: GraphSnapshot) -> str:
         completed = [{"id": node_id, "capability": node["skill"], "arguments": node["input"],

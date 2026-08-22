@@ -35,6 +35,12 @@ class ScopeBody(BaseModel):
 
 class RunBody(ScopeBody):
     prompt: str = Field(min_length=1, max_length=40_000)
+    # A caller that names the run can subscribe to its event stream while the
+    # run is still going. Without this the id is only known once the run has
+    # ended, which makes the live journal unobservable from outside the process.
+    # ``runtime.run`` has always accepted a run id; only the route did not.
+    run_id: str | None = Field(default=None, min_length=6, max_length=64,
+                               pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     # How the run should answer: a plain text answer ("text", the default) or a
     # composed, validated A2UI interface ("ui"). Additive and domain-agnostic.
     respond_as: str = Field(default="text", pattern="^(text|ui)$")
@@ -44,6 +50,13 @@ class RunBody(ScopeBody):
     budget: float | None = Field(default=None, gt=0)
     principal: str | None = Field(default=None, max_length=200)
     allowed_side_effects: list[str] = Field(default_factory=list, max_length=20)
+    # Optional least-capability profile. Omitted means the historical general
+    # agent. When present, tools outside this set are hidden and rejected.
+    allowed_capabilities: list[str] | None = Field(default=None, max_length=50)
+    # Optional model pin supplied by a product profile. GLC still owns the
+    # provider connection, metering and provider-specific request shape.
+    model: str | None = Field(default=None, min_length=1, max_length=100,
+                              pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
 
 
 class ResumeBody(BaseModel):
@@ -186,12 +199,26 @@ async def _resume_channel_approval(request: Request, body: ChannelMessageBody):
 @router.post("/runs", dependencies=[Depends(require_control)])
 async def run(body: RunBody, request: Request):
     runtime = request.app.state.runtime
+    if body.run_id is not None:
+        # ``GraphStore.start`` answers False for an id that already exists and
+        # the runtime does not read that answer, so a reused id would quietly
+        # run the *stored* prompt instead of this one. Refuse instead.
+        try:
+            runtime.graph.snapshot(body.run_id)
+        except KeyError:
+            pass
+        else:
+            raise HTTPException(409, f"run {body.run_id!r} already exists")
     try:
         return await runtime.run(prompt=body.prompt, scope=body.scope(),
                                  llm=lambda prompt, system: gateway_text_llm(request.app, prompt, system),
                                  source_uri="api://agent/runs", source_author=body.user_id or "api-user",
                                  respond_as=body.respond_as, budget=body.budget, principal=body.principal,
                                  allowed_side_effects=set(body.allowed_side_effects),
+                                 allowed_capabilities=(set(body.allowed_capabilities)
+                                                       if body.allowed_capabilities is not None else None),
+                                 model=body.model,
+                                 run_id=body.run_id,
                                  transport=request.app.state.gateway)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error

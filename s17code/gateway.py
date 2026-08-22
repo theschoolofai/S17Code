@@ -26,7 +26,13 @@ class GatewayClient:
 
     def __init__(self, base_url: str | None = None, *, client: httpx.AsyncClient | None = None) -> None:
         self.base_url = (base_url or os.getenv("GLC_BASE_URL", "http://127.0.0.1:8111")).rstrip("/")
-        self._client = client or httpx.AsyncClient(timeout=120)
+        # A hosted model answers a planning call in seconds. A local one loads
+        # weights first: a cold 1.7B on an Orin Nano costs ~106 s before it
+        # emits a token, so a fixed 120 s ceiling times out the run rather than
+        # the model. Every other bound in this codebase is configurable; this
+        # one was not.
+        timeout = float(os.getenv("S17_GATEWAY_TIMEOUT", "120"))
+        self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
 
     def _payload(self, prompt: str, system: str, request: dict[str, Any] | None) -> dict[str, Any]:

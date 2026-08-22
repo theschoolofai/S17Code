@@ -166,6 +166,8 @@ class AgentRuntime:
                   source_uri: str | None, source_author: str | None, run_id: str | None = None,
                   resume: bool = False, respond_as: str = "text",
                   allowed_side_effects: set[str] | None = None,
+                  allowed_capabilities: set[str] | None = None,
+                  model: str | None = None,
                   budget: float | None = None, principal: str | None = None,
                   transport: ChatTransport | None = None,
                   economics: EconomicsConfig | None = None,
@@ -185,6 +187,10 @@ class AgentRuntime:
             scope = MemoryScope(**context["scope"])
             respond_as = str(context.get("respond_as", respond_as))
             allowed_side_effects = set(context.get("allowed_side_effects", []))
+            stored_capabilities = context.get("allowed_capabilities")
+            allowed_capabilities = (set(stored_capabilities)
+                                    if stored_capabilities is not None else None)
+            model = context.get("model") or None
             source_uri, source_author, inbound_id = context["source_uri"], context["source_author"], context.get("inbound_id")
             initial_evidence = context.get("initial_evidence") or {}
         else:
@@ -200,9 +206,23 @@ class AgentRuntime:
                                               "source_uri": source_uri, "source_author": source_author,
                                               "inbound_id": inbound_id, "respond_as": respond_as,
                                               "allowed_side_effects": sorted(allowed_side_effects or ()),
+                                              "allowed_capabilities": (sorted(allowed_capabilities)
+                                                                       if allowed_capabilities is not None else None),
+                                              "model": model,
                                               "initial_evidence": initial_evidence or {}})
         assert prompt is not None and scope is not None and source_uri is not None and source_author is not None
         user_source = SourceRef(source_uri, source_author, excerpt=prompt)
+
+        # Product profiles may pin a model while the gateway keeps ownership of
+        # provider access, metering and request validation. This wrapper also
+        # reconstructs the pin after resume from the persisted run context.
+        if model and transport is not None and budget is None:
+            async def selected_llm(text: str, system: str) -> dict[str, Any]:
+                return await transport.chat(
+                    prompt=text, system=system, request={"model": model}
+                )
+
+            llm = selected_llm
 
         # --- JitRL: restate the request before anything plans against it -----
         # "the login is broken" costs the planner two or three nodes working out
@@ -254,6 +274,8 @@ class AgentRuntime:
         # unmetered path to a provider.
         surface_request = {"max_tokens": int(os.getenv("S17_SURFACE_MAX_TOKENS", "4000")),
                            "agent": "s17_compose_surface"}
+        if model:
+            surface_request["model"] = model
         if controller is not None:
             surface_llm: TextLLM = controller.as_text_llm(**surface_request)
         elif transport is not None:
@@ -398,13 +420,49 @@ class AgentRuntime:
         if self._skills() is None:
             unavailable |= {"load_skill"}
 
-        async def planning_llm(planning_prompt: str, system: str) -> dict[str, Any]:
+        # The planner's output envelope is a schema, and a gateway that can
+        # constrain decoding to it turns "wrong shape" from a rejected proposal
+        # into an unrepresentable one. This matters most exactly where the
+        # repair budget is scarcest: a small local model answers a planning
+        # prompt in the shape it was tuned on, not the one it was asked for.
+        # It is the SAME metered seam every other call uses — one extra request
+        # field, never a second path to a provider.
+        planner_request = {"max_tokens": int(os.getenv("S17_PLANNER_MAX_TOKENS", "1200")),
+                           "agent": "s17_planner"}
+        if model:
+            planner_request["model"] = model
+
+        def _schema_request(schema: dict[str, Any]) -> dict[str, Any]:
+            return {**planner_request,
+                    "response_format": {"type": "json_schema", "name": "graph_patch",
+                                        "strict": True, "schema": schema}}
+
+        # Off by default. The structured path talks to the transport directly to
+        # carry `response_format`, which deliberately steps around the
+        # `gateway_text_llm` seam that tests patch — so a deployment opts in and
+        # every existing caller behaves exactly as it did before.
+        structured_enabled = os.getenv("S17_PLANNER_STRUCTURED", "0").lower() in {"1", "true", "yes"}
+
+        async def _structured_call(text: str, system: str, schema: dict[str, Any]) -> dict[str, Any]:
+            request = _schema_request(schema)
+            if controller is not None:
+                return await controller.as_text_llm(**request)(text, system)
+            assert transport is not None
+            return await transport.chat(prompt=text, system=system, request=request)
+
+        can_structure = structured_enabled and (controller is not None or transport is not None)
+
+        async def planning_llm(planning_prompt: str, system: str,
+                               schema: dict[str, Any] | None = None) -> dict[str, Any]:
             """The planner is a first-class metered model call, never a free seam."""
             nonlocal planner_calls
             planner_calls += 1
             with call_site(f"plan_{planner_calls}", "planner") as site:
                 try:
-                    result = await llm(planning_prompt, system)
+                    if schema is None:
+                        result = await llm(planning_prompt, system)
+                    else:
+                        result = await _structured_call(planning_prompt, system, schema)
                 except Exception as error:
                     setattr(error, "_s17_planner_meter", site.result_fields())
                     raise
@@ -418,11 +476,13 @@ class AgentRuntime:
         planner: Any = GeneralAgentPlanner(
             planning_llm, registry, goal=restated_goal, respond_as=respond_as,
             allowed_side_effects=set(allowed_side_effects or ()),
+            allowed_capabilities=allowed_capabilities,
             max_nodes=int(os.getenv("S17_MAX_GRAPH_NODES", "32")),
             max_new_tasks=int(os.getenv("S17_MAX_FRONTIER", "4")),
             initial_evidence=initial_evidence, unavailable=unavailable,
             max_repeat_failures=int(os.getenv("S17_MAX_REPEAT_FAILURES", "4")),
             skills=self._skills(),
+            structured_llm=planning_llm if can_structure else None,
         )
         # On a budgeted run the planner is wrapped so each new node
         # declares the tier its role needs and the allowance is re-divided across
