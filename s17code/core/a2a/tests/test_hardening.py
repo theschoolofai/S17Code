@@ -11,7 +11,7 @@ from a2a.types import a2a_pb2_grpc as pb_grpc
 
 from s17code.core.a2a.official import A2AGraphBridge, GraphA2ARemote, OfficialA2AServer
 from s17code.core.a2a.schema import AgentCardError, negotiate_interface, validate_agent_card
-from s17code.core.a2a.server import A2ADemoServer
+from s17code.core.a2a.server import A2ADemoServer, Task, TaskState
 from s17code.core.live_graph import GraphPatch, GraphStore, LiveGraphExecutor, TaskSpec
 
 
@@ -86,6 +86,46 @@ async def test_push_is_authenticated_signed_retried_and_idempotent(tmp_path):
         assert calls[-1].headers["a2a-signature"] == f"sha256={expected}"
         await server._notify(server.tasks[result["id"]])
         assert len(calls) == 3
+    finally:
+        await server.close(); await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_push_callback_refuses_private_targets(tmp_path):
+    """pushNotificationConfig.url is caller-supplied. Posting to it is SSRF.
+
+    Distinct from GET /trace?endpoint= (the OTEL exporter). This is the A2A
+    webhook the caller names on message/send.
+    """
+    calls = []
+
+    async def callback(request: httpx.Request):
+        calls.append(str(request.url))
+        return httpx.Response(204)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(callback))
+    server = A2ADemoServer(card(), task_db=tmp_path / "push-ssrf.sqlite",
+                           push_http=http, push_attempts=1, push_backoff=0)
+    bad_urls = [
+        "http://127.0.0.1:8111/v1/control/kill",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://localhost/internal",
+        "http://10.0.0.8/admin",
+        "http://[::1]/",
+        "http://[::ffff:127.0.0.1]/",
+        "file:///etc/passwd",
+    ]
+    try:
+        for bad in bad_urls:
+            with pytest.raises(ValueError, match="http\\(s\\)|private host"):
+                await server.send(params(callback={"url": bad, "token": "receiver-token"}))
+            planted = Task(id=f"planted-{bad[:24]}", context_id="c", text="x",
+                           state=TaskState.COMPLETED, callback_url=bad)
+            await server._notify(planted)
+        assert calls == []
+        ok = await server.send(params(callback={"url": "https://callback.test/a2a"}))
+        assert ok["status"]["state"] == "completed"
+        assert calls == ["https://callback.test/a2a"]
     finally:
         await server.close(); await http.aclose()
 
