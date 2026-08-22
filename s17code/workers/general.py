@@ -92,9 +92,14 @@ async def list_channels(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:  # n
 
 async def request_approval(ctx: RunContext, task: TaskSpec) -> Deferred:
     handle = hashlib.sha256(f"{ctx.run_id}:{task.id}:approval".encode()).hexdigest()[:32]
+    params = {
+        "question": task.input["question"],
+        "choices": list(task.input.get("choices") or []),
+    }
     return Deferred(handle, "approval.received",
-                    {"question": task.input["question"],
-                     "choices": task.input.get("choices", [])})
+                    {"question": params["question"],
+                     "choices": params["choices"],
+                     "params": params})
 
 
 async def run_retriever(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
