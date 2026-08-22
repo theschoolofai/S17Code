@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
+import logging
 import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -13,12 +15,55 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .schema import validate_agent_card
+
+log = logging.getLogger(__name__)
+
+
+def public_http_url(url: str, *, what: str = "push callback URL") -> str:
+    """Raise ValueError if `url` is not a public http(s) target.
+
+    A2A lets the caller name a webhook. Posting to that URL is the privilege;
+    the caller must not be able to point it at loopback, link-local metadata,
+    or RFC1918 space. IP literals and localhost names are checked here; this
+    does not resolve DNS.
+    """
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"{what} must be http(s)")
+    host = (parsed.hostname or "").strip("[]").lower()
+    if not host:
+        raise ValueError(f"{what} has no host")
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError(f"{what} must not target a private host")
+    if host in {"metadata.google.internal", "metadata"}:
+        raise ValueError(f"{what} must not target a private host")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return url
+    forbidden = (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+    if isinstance(ip, ipaddress.IPv6Address):
+        if getattr(ip, "is_site_local", False):
+            forbidden = True
+        mapped = ip.ipv4_mapped or ip.sixtofour
+        if mapped is not None and (
+            mapped.is_private or mapped.is_loopback or mapped.is_link_local
+            or mapped.is_reserved or mapped.is_multicast or mapped.is_unspecified
+        ):
+            forbidden = True
+    if forbidden:
+        raise ValueError(f"{what} must not target a private host")
+    return url
 
 
 class TaskState(StrEnum):
@@ -200,7 +245,10 @@ class A2ADemoServer:
         task = Task(id=str(uuid.uuid4()), context_id=str(message.get("contextId") or uuid.uuid4()), text=text)
         config = params.get("configuration", {})
         push = config.get("pushNotificationConfig", {})
-        task.callback_url = push.get("url")
+        url = push.get("url")
+        if url:
+            public_http_url(str(url))
+        task.callback_url = url
         task.callback_token = push.get("token") or push.get("authentication", {}).get("credentials")
         self.tasks[task.id] = task
         self.store.save(task)
@@ -246,6 +294,14 @@ class A2ADemoServer:
 
     async def _notify(self, task: Task) -> None:
         if not task.callback_url:
+            return
+        try:
+            public_http_url(task.callback_url)
+        except ValueError as exc:
+            # Recovered tasks (and anything that bypassed _new_task) still
+            # must not POST. Completing the task is not the same as granting
+            # the webhook.
+            log.warning("refusing A2A push to %s: %s", task.callback_url, exc)
             return
         event = {"jsonrpc": "2.0", "method": "tasks/statusUpdate", "params": task.wire(), "url": task.callback_url}
         if self.push_callback:
