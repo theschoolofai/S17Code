@@ -102,7 +102,7 @@ class A2ADemoServer:
                  task_handler: TaskHandler | None = None, task_db: str | Path = ":memory:",
                  bearer_tokens: set[str] | None = None, api_keys: set[str] | None = None,
                  push_signing_secret: str | None = None, push_http: httpx.AsyncClient | None = None,
-                 push_attempts: int = 4, push_backoff: float = .05) -> None:
+                 push_attempts: int = 4, push_backoff: float = .05, task_delay: float = .08) -> None:
         validate_agent_card(card)
         self.card, self.push_callback, self.task_handler = card, push_callback, task_handler
         self.store = DurableTaskStore(task_db)
@@ -110,6 +110,11 @@ class A2ADemoServer:
         self.bearer_tokens, self.api_keys = bearer_tokens or set(), api_keys or set()
         self.push_signing_secret, self.push_http = push_signing_secret, push_http
         self.push_attempts, self.push_backoff = push_attempts, push_backoff
+        # How long a "slow" task stays in flight. A caller that has to reach the
+        # task mid-flight must be able to widen this: 80ms is shorter than the two
+        # SQLite commits a live graph makes on its way to issuing a cancel, so a
+        # fixed value turns "cancel a running task" into a coin flip.
+        self.task_delay = task_delay
         self._jobs: dict[str, asyncio.Task[None]] = {}
         self.app = FastAPI(title="S15 core local A2A adapter")
         self.app.get("/.well-known/agent-card.json")(self.agent_card)
@@ -168,7 +173,7 @@ class A2ADemoServer:
             task.updated_at = datetime.now(UTC).isoformat()
             self.store.save(task)
             await self._notify(task)
-            self._jobs[task.id] = asyncio.create_task(self._complete_later(task, 0.08))
+            self._jobs[task.id] = asyncio.create_task(self._complete_later(task, self.task_delay))
             return task.wire()
         await self._complete(task)
         return task.wire()
