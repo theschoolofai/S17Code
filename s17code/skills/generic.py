@@ -153,7 +153,7 @@ class GenericSkill:
         if not self.keywords:
             return False
         haystack = goal.lower()
-        return any(k in haystack for k in self.keywords)
+        return any(re.search(rf"\b{re.escape(k)}\b", haystack) for k in self.keywords)
 
     def render(self) -> str:
         """The text injected into the planner's system prompt."""
