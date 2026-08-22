@@ -75,6 +75,21 @@ def test_a_name_has_to_be_boring_because_the_model_reads_it(tmp_path) -> None:
         GenericSkill.from_file(write(tmp_path, "bad", bad))
 
 
+def test_a_utf8_bom_does_not_break_the_frontmatter_scan(tmp_path) -> None:
+    """Notepad writes a UTF-8 BOM by default on Windows. ``\\A---`` only matches
+    at the true start of the string, so a leading BOM byte made every such file
+    fail with a misleading "must open with a --- frontmatter block" error, even
+    though the file plainly does."""
+    d = tmp_path / "bomskill"
+    d.mkdir()
+    p = d / "SKILL.md"
+    p.write_bytes(b"\xef\xbb\xbf---\nname: bomskill\ndescription: saved by Notepad\n---\nbody\n")
+
+    skill = GenericSkill.from_file(p)
+    assert skill.name == "bomskill"
+    assert skill.instructions == "body"
+
+
 # -- discovery, registration, toggling ------------------------------------
 
 
