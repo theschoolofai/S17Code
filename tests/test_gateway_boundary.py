@@ -83,6 +83,20 @@ async def test_gateway_can_fall_back_without_exposing_credentials(monkeypatch):
     assert result["text"] == "fallback"
 
 
+@pytest.mark.asyncio
+async def test_gateway_does_not_invent_zero_usage_when_the_provider_omits_it():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"text": "done", "provider": "gemini_2", "model": "gemini"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await GatewayClient("http://127.0.0.1:8111", client=http).chat(
+            prompt="Investigate", system="Use evidence"
+        )
+    assert result["text"] == "done"
+    assert result["input_tokens"] is None
+    assert result["output_tokens"] is None
+
+
 def test_s17code_does_not_reimplement_gateway_routes(app_client):
     assert app_client.post("/v1/chat", json={}).status_code == 404
     assert app_client.get("/v1/providers").status_code == 404

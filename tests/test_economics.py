@@ -281,6 +281,37 @@ def controller(ladder, pricing, budget, **overrides) -> tuple[BudgetedGateway, M
     )
 
 
+class SilentTransport:
+    """A gateway that returns text and no usage — the unmetered-spend hole."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, *, prompt, system, request=None):
+        self.calls += 1
+        return {"text": "ok", "provider": "p_1", "model": "mid-1"}
+
+
+async def test_omitted_usage_is_not_a_free_call(ladder, pricing):
+    """`int(response.get("input_tokens") or 0)` billed missing counters as $0.
+
+    The transport still ran. The ceiling thought nothing was spent. That is
+    unmetered spend, which this module exists to make structurally impossible.
+    """
+    budget = RunBudget(total=1.0)
+    transport = MeteredTransport(SilentTransport())
+    gateway = BudgetedGateway(
+        transport, budget=budget, policy=policy(ladder, pricing),
+        pricing=pricing, ladder=ladder,
+    )
+    with call_site("a", "scout"):
+        with pytest.raises(BudgetRefused, match="omitted usage"):
+            await gateway.complete("p", "s")
+    assert transport.calls == 1
+    assert budget.spent > 0
+    assert budget.spent <= budget.total
+
+
 async def test_every_admitted_call_is_metered_none_bypasses(ladder, pricing):
     budget = RunBudget(total=1.0)
     gateway, transport = controller(ladder, pricing, budget)
