@@ -31,7 +31,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 
-from .workspace import Workspace
+from .workspace import Workspace, WorkspaceError
 
 DEFAULT_ALLOWLIST = ("pytest", "python", "python3", "uv", "ruff", "mypy", "git", "node", "npm")
 MAX_OUTPUT_CHARS = 20_000
@@ -76,6 +76,42 @@ class CommandResult:
                 "stdout": self.stdout, "stderr": self.stderr}
 
 
+
+def _looks_like_path(argument: str) -> bool:
+    if argument.startswith("-"):
+        return False
+    return os.path.isabs(argument) or "/" in argument.replace("\\", "/") or argument.startswith(".")
+
+
+def _refuse_scripts_outside_the_workspace(workspace: Workspace, argv: list[str]) -> None:
+    """python/node/pytest may run files; those files must still be the work."""
+    program = os.path.basename(argv[0])
+    if not (program.startswith("python") or program in {"node", "pytest", "py.test"}):
+        return
+    skip_next = False
+    for argument in argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if argument in {"-m", "--config"}:
+            skip_next = True
+            continue
+        if not _looks_like_path(argument):
+            continue
+        if os.path.isabs(argument):
+            resolved = os.path.realpath(argument)
+            root = os.path.realpath(str(workspace.root))
+            if resolved != root and not resolved.startswith(root + os.sep):
+                raise CommandError(
+                    f"{argument!r} is outside the workspace; refused"
+                )
+            continue
+        try:
+            workspace.resolve(argument)
+        except WorkspaceError as error:
+            raise CommandError(str(error)) from error
+
+
 def allowlist() -> tuple[str, ...]:
     configured = os.getenv("S17_ALLOWED_COMMANDS", "").strip()
     if configured:
@@ -83,7 +119,7 @@ def allowlist() -> tuple[str, ...]:
     return DEFAULT_ALLOWLIST
 
 
-def _check(argv: list[str]) -> None:
+def _check(argv: list[str], workspace: Workspace | None = None) -> None:
     if not argv:
         raise CommandError("no command given")
     for token in argv:
@@ -105,6 +141,8 @@ def _check(argv: list[str]) -> None:
             raise CommandError("python -c is refused: it is an unbounded shell")
         if argument in FORBIDDEN_ARGS and program in {"pip", "uv"}:
             raise CommandError(f"{argument!r} is refused for {program}")
+    if workspace is not None:
+        _refuse_scripts_outside_the_workspace(workspace, argv)
     if program == "git":
         # `git -c ...`, `--upload-pack` and friends can run arbitrary programs.
         subcommand = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -121,7 +159,7 @@ def run_command(workspace: Workspace, command: str | list[str], *,
                 timeout: int = DEFAULT_TIMEOUT) -> CommandResult:
     """Run one allowlisted command inside the workspace, bounded."""
     argv = shlex.split(command) if isinstance(command, str) else list(command)
-    _check(argv)
+    _check(argv, workspace)
     timeout = max(1, min(int(timeout), MAX_TIMEOUT))
 
     if os.getenv("S17_EXEC_CONTAINER", "").strip() == "1":
