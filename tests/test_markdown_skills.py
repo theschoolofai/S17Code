@@ -97,6 +97,25 @@ def test_one_broken_skill_does_not_stop_the_others_but_is_reported(tmp_path) -> 
     assert len(manager.errors) == 1 and "frontmatter" in manager.errors[0]
 
 
+def test_a_non_utf8_skill_is_recorded_and_skipped_not_raised(tmp_path) -> None:
+    """discover()'s own contract: 'a broken skill file is recorded and skipped,
+    never raised. One bad file in a skills directory should not stop an agent
+    from starting.' A cp1252-saved file with a smart quote raises
+    UnicodeDecodeError, which is a ValueError, not an OSError or a SkillError
+    -- neither of which discover()'s except clauses catch -- so it used to
+    propagate straight out of discover() and take the whole call down."""
+    write(tmp_path, "good", "---\nname: good\ndescription: fine\n---\nbody")
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    (bad_dir / "SKILL.md").write_bytes(
+        b"---\nname: bad\ndescription: uses \x93smart quotes\x94\n---\nbody\n"
+    )
+
+    manager = SkillManager.discover(tmp_path)
+    assert [s.name for s in manager.all()] == ["good"]
+    assert len(manager.errors) == 1
+
+
 def test_a_missing_skills_directory_is_reported_not_raised(tmp_path) -> None:
     manager = SkillManager.discover(tmp_path / "nope")
     assert len(manager) == 0

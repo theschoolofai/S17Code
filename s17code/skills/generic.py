@@ -92,7 +92,11 @@ class GenericSkill:
         p = Path(path)
         try:
             source = p.read_text(encoding="utf-8")
-        except OSError as exc:  # unreadable file, wrong permissions, dangling link
+        except (OSError, UnicodeDecodeError) as exc:
+            # OSError: unreadable file, wrong permissions, dangling link.
+            # UnicodeDecodeError: a non-UTF-8 file (e.g. saved as cp1252) --
+            # a ValueError, not an OSError, so it needs its own clause to be
+            # caught here rather than escaping as an unhandled crash.
             raise SkillError(f"cannot read {p}: {exc}") from exc
 
         meta, body = parse_frontmatter(source)
