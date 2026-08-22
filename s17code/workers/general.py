@@ -31,7 +31,7 @@ from s17code.tools import (
 )
 from s17code.workers.context import RunContext
 
-__all__ = ['run_calculate', 'run_current_datetime', 'run_date_shift', 'run_fetch', 'run_file_sha256', 'run_query_csv', 'run_search', 'run_copy_file', 'run_read_file', 'run_write_file', 'run_index', 'list_channels', 'request_approval', 'run_retriever', 'list_directory', 'run_verify_artifact', 'send_channel_message', 'a2a_delegate', 'create_calendar_events', 'load_skill', 'launch_job', 'run_content', 'run_researcher']
+__all__ = ['run_calculate', 'run_current_datetime', 'run_date_shift', 'run_fetch', 'run_file_sha256', 'run_query_csv', 'run_search', 'run_copy_file', 'run_read_file', 'run_write_file', 'run_index', 'list_channels', 'request_approval', 'list_directory', 'run_verify_artifact', 'send_channel_message', 'a2a_delegate', 'create_calendar_events', 'load_skill', 'launch_job', 'run_content', 'run_researcher']
 
 
 async def run_calculate(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
@@ -95,13 +95,6 @@ async def request_approval(ctx: RunContext, task: TaskSpec) -> Deferred:
     return Deferred(handle, "approval.received",
                     {"question": task.input["question"],
                      "choices": task.input.get("choices", [])})
-
-
-async def run_retriever(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
-    hits = await recall(TaskSpec(task.id, "memory_recall", {"query": task.input.get("query", ctx.goal)}))
-    result = await ctx.llm(json.dumps(hits), "You are the retriever role. Summarise only supplied scoped memory evidence.")
-    return {**hits, "text": result.get("text", ""), "provider": result.get("provider"),
-            "model": result.get("model"), "agent": task.skill}
 
 
 async def list_directory(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
