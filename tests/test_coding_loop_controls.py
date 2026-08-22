@@ -6,6 +6,7 @@ test harness, never once touching the page it was supposed to build.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -100,6 +101,70 @@ def test_a_validator_that_ran_nothing_is_not_a_pass() -> None:
 def test_a_clean_validation_passes() -> None:
     from s17code.coding.validate import summarise
     assert summarise({"passed": True, "findings": [], "summary": "ran it, works"})["passed"]
+
+
+@pytest.mark.asyncio
+async def test_a_nested_validator_is_a_fail_not_a_pass() -> None:
+    """The skip path used to return passed: True. A green check on a control
+    that never ran is the lecture failure shape."""
+    from s17code.core.live_graph import TaskSpec
+    from s17code.workers.context import RunContext
+    from s17code.workers.special import run_validate_work
+
+    class Runtime:
+        async def run(self, **kwargs):
+            nested = await run_validate_work(ctx, task)
+            assert nested["passed"] is False
+            assert nested["skipped"] is True
+            assert nested["blockers"] == 0
+            return {"answer": json.dumps({"passed": True, "findings": [], "summary": "ran it"}),
+                    "run_id": "child", "status": "succeeded"}
+
+    runtime = Runtime()
+    ctx = RunContext(run_id="parent", runtime=runtime, llm=None, scope=None,
+                     registry=None, ledger=None)
+    task = TaskSpec("v", "validate_work", {"requirement": "the page works", "paths": ["index.html"]})
+    out = await run_validate_work(ctx, task)
+    assert out["passed"] is True
+    assert "skipped" not in out
+    assert out["validator_run_id"] == "child"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_validators_do_not_share_a_process_flag() -> None:
+    """Depth used to live in os.environ. The second overlapping validate_work
+    was skipped (and historically reported passed) because the first still held
+    the env var. A ContextVar is per-task."""
+    import asyncio
+
+    from s17code.core.live_graph import TaskSpec
+    from s17code.workers.context import RunContext
+    from s17code.workers.special import run_validate_work
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[int] = []
+
+    class Runtime:
+        async def run(self, **kwargs):
+            calls.append(1)
+            started.set()
+            await release.wait()
+            return {"answer": json.dumps({"passed": True, "findings": [], "summary": "ran it"}),
+                    "run_id": f"child-{len(calls)}", "status": "succeeded"}
+
+    runtime = Runtime()
+    ctx = RunContext(run_id="shared", runtime=runtime, llm=None, scope=None,
+                     registry=None, ledger=None)
+    task = TaskSpec("v", "validate_work", {"requirement": "x", "paths": []})
+    first = asyncio.create_task(run_validate_work(ctx, task))
+    await started.wait()
+    second = asyncio.create_task(run_validate_work(ctx, task))
+    await asyncio.sleep(0.05)
+    release.set()
+    results = await asyncio.gather(first, second)
+    assert len(calls) == 2, "the overlapping validator was skipped"
+    assert all(r["passed"] is True and r.get("skipped") is not True for r in results)
 
 
 # ------------------------------------------------------ the supplied harness
