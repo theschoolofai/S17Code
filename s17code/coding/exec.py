@@ -76,6 +76,17 @@ class CommandResult:
                 "stdout": self.stdout, "stderr": self.stderr}
 
 
+
+def _git_retargets_repo(argument: str) -> bool:
+    """True if this git flag makes cwd=workspace meaningless."""
+    if argument == "-C" or (argument.startswith("-C") and not argument.startswith("-c")):
+        return True
+    for flag in ("--git-dir", "--work-tree"):
+        if argument == flag or argument.startswith(flag + "="):
+            return True
+    return False
+
+
 def allowlist() -> tuple[str, ...]:
     configured = os.getenv("S17_ALLOWED_COMMANDS", "").strip()
     if configured:
@@ -106,6 +117,14 @@ def _check(argv: list[str]) -> None:
         if argument in FORBIDDEN_ARGS and program in {"pip", "uv"}:
             raise CommandError(f"{argument!r} is refused for {program}")
     if program == "git":
+        # `-c` is lowercase config. `-C`, `--git-dir` and `--work-tree` retarget
+        # the repository, so cwd=workspace is not a bound. Check these *before*
+        # picking the subcommand: `git -C /tmp status` would otherwise treat
+        # `/tmp` as the subcommand and refuse it for the wrong reason.
+        if any(_git_retargets_repo(a) for a in argv[1:]):
+            raise CommandError(
+                "git -C / --git-dir / --work-tree leave the workspace; refused"
+            )
         # `git -c ...`, `--upload-pack` and friends can run arbitrary programs.
         subcommand = next((a for a in argv[1:] if not a.startswith("-")), "")
         if subcommand not in GIT_SUBCOMMANDS:
