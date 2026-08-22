@@ -26,6 +26,9 @@ DEFAULT_PROTECTED = (
     "tests/**", "test/**", "**/tests/**", "**/test_*.py", "**/*_test.py",
     "conftest.py", "**/conftest.py",
     "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", ".github/**",
+    # HOME is the workspace, so this file is git's global config: fsmonitor
+    # and diff.external are shells.
+    ".gitconfig", "**/.gitconfig", ".config/git/**",
 )
 
 

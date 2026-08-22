@@ -138,7 +138,13 @@ def run_command(workspace: Workspace, command: str | list[str], *,
             argv, cwd=workspace.root, capture_output=True, text=True,
             timeout=timeout, shell=False,            # never a shell
             env={"PATH": os.environ.get("PATH", ""), "HOME": str(workspace.root),
-                 "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"},
+                 "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1",
+                 # HOME is the workspace, so without these git would treat
+                 # `.gitconfig` as its global config and run fsmonitor /
+                 # diff.external from a file the agent can write.
+                 "GIT_CONFIG_GLOBAL": os.devnull,
+                 "GIT_CONFIG_SYSTEM": os.devnull,
+                 "GIT_CONFIG_NOSYSTEM": "1"},
         )
         return CommandResult(
             argv, completed.returncode,
