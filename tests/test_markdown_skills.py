@@ -152,6 +152,26 @@ def test_selection_is_keyword_matching_not_a_second_model_call(tmp_path) -> None
     assert manager.select("fix the css on the pricing page") == []
 
 
+def test_keyword_matching_respects_word_boundaries(tmp_path) -> None:
+    """A short keyword is a real word away from home, and a naive substring
+    test fires on any word that merely contains it. The shipped ``a2ui`` skill
+    declares keyword ``ui`` — a substring of **build**, **quick**, **require**,
+    **guide** and **circuit** — and ``charts`` declares ``graph``/``data``, a
+    substring of **paragraph**/**database**. Neither goal has anything to do
+    with UI or charts, but both used to match and inject an unrelated skill's
+    body into the planner's system prompt."""
+    write(tmp_path, "a2ui", "---\nname: a2ui\ndescription: d\nkeywords: [ui]\n---\nbody")
+    write(tmp_path, "charts", "---\nname: charts\ndescription: d\nkeywords: [graph, data]\n---\nbody")
+    manager = SkillManager.discover(tmp_path)
+
+    assert manager.select("build a summary of the quarterly numbers") == []
+    assert manager.select("explain the paragraph about database schemas") == []
+
+    # A real word boundary hit still fires.
+    assert [s.name for s in manager.select("fix the ui bug on this page")] == ["a2ui"]
+    assert [s.name for s in manager.select("plot this data as a graph")] == ["charts"]
+
+
 def test_a_skill_marked_always_fires_for_every_goal(tmp_path) -> None:
     write(tmp_path, "house", "---\nname: house\ndescription: house style\nalways: true\n---\nSmall commits.")
     manager = SkillManager.discover(tmp_path)
