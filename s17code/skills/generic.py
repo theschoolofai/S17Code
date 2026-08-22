@@ -91,7 +91,7 @@ class GenericSkill:
     def from_file(cls, path: str | Path) -> "GenericSkill":
         p = Path(path)
         try:
-            source = p.read_text(encoding="utf-8")
+            source = p.read_text(encoding="utf-8-sig")
         except OSError as exc:  # unreadable file, wrong permissions, dangling link
             raise SkillError(f"cannot read {p}: {exc}") from exc
 
