@@ -61,8 +61,9 @@ async def grep_code_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
 
 
 async def run_command_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
-    return run_command(ctx.workspace(), task.input["command"],
-                       timeout=int(task.input.get("timeout", 120)))
+    result = run_command(ctx.workspace(), task.input["command"],
+                         timeout=int(task.input.get("timeout", 120)))
+    return result.as_dict() if hasattr(result, 'as_dict') else result
 
 
 async def git_diff_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:  # noqa: ARG001
