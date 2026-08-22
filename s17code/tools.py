@@ -42,6 +42,20 @@ class _TextExtractor(HTMLParser):
         return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+", " ", value)).strip()
 
 
+def sandbox_root() -> Path:
+    """The one guarded read of the sandbox root.
+
+    Callers that need the root itself — to report a path relative to it, say —
+    must come through here rather than indexing ``os.environ``.  An
+    unconfigured deployment is a boundary the caller can explain, not an
+    engine crash.
+    """
+    configured = os.getenv("S17_SANDBOX_ROOT")
+    if not configured:
+        raise PermissionError("local file skills require S17_SANDBOX_ROOT")
+    return Path(configured).expanduser().resolve()
+
+
 def sandbox_path(path: str) -> Path:
     configured = os.getenv("S17_SANDBOX_ROOT")
     if not configured:

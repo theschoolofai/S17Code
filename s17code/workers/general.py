@@ -27,7 +27,7 @@ from s17code.workers.parsing import _as_section, _parse_json_array, _parse_json_
 from s17code.tools import (
     calculate, copy_file, current_datetime, date_shift, fetch_url, file_sha256,
     file_uri_to_path, query_csv, sandbox_directories, sandbox_files, sandbox_path,
-    web_search, write_text_file,
+    sandbox_root, web_search, write_text_file,
 )
 from s17code.workers.context import RunContext
 
@@ -105,7 +105,7 @@ async def run_retriever(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
 
 
 async def list_directory(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
-    root = Path(os.environ["S17_SANDBOX_ROOT"]).expanduser().resolve()
+    root = sandbox_root()
     paths = sandbox_files(task.input["path"], suffix=task.input.get("suffix", ".md"))
     directories = sandbox_directories(task.input["path"])
     return {"paths": [str(path.relative_to(root)) for path in paths],

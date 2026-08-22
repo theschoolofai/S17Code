@@ -61,8 +61,10 @@ async def grep_code_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
 
 
 async def run_command_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:
+    # `.as_dict()` is not cosmetic: the graph journal is JSON, so returning the
+    # CommandResult dataclass fails the node before its exit code is read.
     return run_command(ctx.workspace(), task.input["command"],
-                       timeout=int(task.input.get("timeout", 120)))
+                       timeout=int(task.input.get("timeout", 120))).as_dict()
 
 
 async def git_diff_worker(ctx: RunContext, task: TaskSpec) -> dict[str, Any]:  # noqa: ARG001

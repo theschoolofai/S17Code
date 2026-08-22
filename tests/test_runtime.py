@@ -1,10 +1,13 @@
 """End-to-end proof: HTTP request -> durable scoped memory -> live graph -> answer."""
 from __future__ import annotations
 
+import asyncio
 import json
 
 import s17code.routes as agent_route
+from s17code.core.memory import MemoryScope
 from s17code.core.memory.embeddings import DeterministicEmbedder
+from s17code.runtime import AgentRuntime
 
 
 def test_agent_run_uses_memory_then_expands_to_a_grounded_answer(app_client, monkeypatch):
@@ -133,3 +136,45 @@ def test_http_resume_replays_persisted_run_context(app_client, monkeypatch):
     body = response.json()
     assert body["answer"] == "resumed answer"
     assert body["trace"]["agents"]["answer"]["provider"] == "gemini_2"
+
+
+def test_product_model_pin_reaches_every_unbudgeted_gateway_call():
+    calls: list[dict] = []
+
+    class Gateway:
+        async def chat(self, *, prompt, system, request=None):
+            calls.append(dict(request or {}))
+            if "evidence-readiness critic" in system:
+                text = json.dumps({"ready": True, "missing": [], "reason": "complete"})
+            elif "decision core of a live-graph agent" in system:
+                context = json.loads(prompt)
+                if context["graph"]["nodes"]:
+                    patch = {"add": [], "cancel": [], "finish": True, "reason": "done"}
+                else:
+                    patch = {"add": [{"id": "answer", "capability": "answer_with_evidence",
+                        "arguments": {"query": context["goal"]}, "depends_on": []}],
+                        "cancel": [], "finish": False, "reason": "answer directly"}
+                text = json.dumps(patch)
+            else:
+                text = "model-routed answer"
+            return {"text": text, "provider": "ollama", "model": (request or {}).get("model"),
+                    "input_tokens": 1, "output_tokens": 1}
+
+    async def never(_prompt, _system):
+        raise AssertionError("the selected model must use the governed transport")
+
+    runtime = AgentRuntime()
+    runtime.memory.embedder = DeterministicEmbedder(128)
+    try:
+        result = asyncio.run(runtime.run(
+            prompt="Explain the result.", scope=MemoryScope("blackbox", "panel-code", "tester"),
+            llm=never, source_uri="test://model-route", source_author="tester",
+            transport=Gateway(), model="qwen3.8:latest",
+            allowed_capabilities={"answer_with_evidence"},
+        ))
+    finally:
+        runtime.close()
+
+    assert result["answer"] == "model-routed answer"
+    assert calls
+    assert {call.get("model") for call in calls} == {"qwen3.8:latest"}

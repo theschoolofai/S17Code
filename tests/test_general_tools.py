@@ -66,3 +66,22 @@ def test_registry_validates_generic_tool_contracts():
     assert registry.validate("write_file", {"path": "x.txt", "content": "x"})["overwrite"] is False
     with pytest.raises(CapabilityError):
         registry.validate("write_file", {"path": "x.txt", "content": "x", "overwrite": "yes"})
+
+
+@pytest.mark.asyncio
+async def test_list_directory_refuses_in_words_when_the_sandbox_is_unconfigured(monkeypatch):
+    """An unconfigured deployment must state its refusal, not leak a KeyError.
+
+    Every other sandbox entry point reads the root through a guarded helper and
+    raises `PermissionError("local file skills require S17_SANDBOX_ROOT")`.
+    `list_directory` indexes `os.environ` directly, so the same deployment
+    produces `KeyError: 'S17_SANDBOX_ROOT'` — a message that reads as an engine
+    crash rather than a boundary, and one the planner cannot act on.
+    """
+    from s17code.core.live_graph import TaskSpec
+    from s17code.workers.general import list_directory
+
+    monkeypatch.delenv("S17_SANDBOX_ROOT", raising=False)
+
+    with pytest.raises(PermissionError, match="S17_SANDBOX_ROOT"):
+        await list_directory(None, TaskSpec("list_files", "list_directory", {"path": "."}))

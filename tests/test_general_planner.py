@@ -128,6 +128,38 @@ def test_planner_manifest_hides_side_effects_the_run_cannot_execute():
     assert "answer_with_evidence" in names
 
 
+def test_agent_profile_hides_every_capability_outside_its_allowlist():
+    planner = GeneralAgentPlanner(
+        Replies(), default_registry(), goal="answer from local documents",
+        review_terminal=False, allowed_side_effects={"index_file"},
+        allowed_capabilities={"read_file", "index_file", "memory_recall", "answer_with_evidence"},
+    )
+    payload = json.loads(planner._prompt(snapshot(), Event(1, "run_started", None, {})))
+    names = {item["name"] for item in payload["capabilities"]}
+
+    assert names == {"read_file", "index_file", "memory_recall", "answer_with_evidence"}
+    assert payload["authority"]["allowed_capabilities"] == sorted(names)
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_rejects_a_hidden_capability_even_if_the_model_guesses_it():
+    reply = Replies({
+        "add": [{"id": "search", "capability": "web_search",
+                 "arguments": {"query": "escape profile"}, "depends_on": []}],
+        "cancel": [], "finish": False, "reason": "guessed a hidden tool",
+    })
+    planner = GeneralAgentPlanner(
+        reply, default_registry(), goal="use local documents", review_terminal=False,
+        repair_attempts=0, allowed_capabilities={"read_file", "answer_with_evidence"},
+    )
+
+    patch = await planner.plan(snapshot(), Event(1, "run_started", None, {}))
+
+    assert patch.finish is True
+    assert "outside this agent profile" in patch.reason
+    assert planner.history[-1]["accepted"] is False
+
+
 @pytest.mark.asyncio
 async def test_duplicate_terminal_proposal_waits_for_the_terminal_already_running():
     nodes = {
@@ -343,3 +375,65 @@ def test_runtime_contains_no_prompt_router_or_benchmark_case_logic():
     assert "DeterministicPlanner" not in source
     assert "family-friendly things to do in Tokyo" not in source
     assert "populations? of" not in source
+
+
+@pytest.mark.asyncio
+async def test_capability_without_configuration_is_rejected_not_executed():
+    """`unavailable` must be a boundary, not only a manifest filter.
+
+    The manifest already omits a capability the deployment cannot run, but the
+    model does not need the manifest to name one: the profile policy text is
+    enough of a hint.  Observed on gemma4 with no `S17_SANDBOX_ROOT`: the
+    planner proposed `list_directory` twenty-one times, validation accepted it
+    every time, and each node died on the worker's own KeyError.  Hiding a
+    capability has to imply refusing it.
+    """
+    reply = Replies({
+        "add": [{"id": "list_files", "capability": "list_directory",
+                 "arguments": {"path": "."}, "depends_on": []}],
+        "cancel": [], "finish": False, "reason": "guessed an unconfigured tool",
+    })
+    planner = GeneralAgentPlanner(
+        reply, default_registry(), goal="list the local documents",
+        review_terminal=False, repair_attempts=0,
+        unavailable={"list_directory"},
+        allowed_capabilities={"list_directory", "answer_with_evidence"},
+    )
+
+    patch = await planner.plan(snapshot(), Event(1, "run_started", None, {}))
+
+    assert patch.finish is True
+    assert "list_directory" in patch.reason
+    assert "not configured" in patch.reason
+    assert planner.history[-1]["accepted"] is False
+
+
+@pytest.mark.asyncio
+async def test_repeating_one_failing_capability_stops_before_the_node_ceiling():
+    """A node that fails outright is the unambiguous case, and it was unwatched.
+
+    `_stuck_verification` only tallies verification nodes that *succeeded* with
+    a non-zero exit, because a command that returns 1 has succeeded at running.
+    A task that raises has no exit code and was therefore never counted, so the
+    planner re-proposed the same dead capability until the graph node limit
+    caught it — twenty-one planner calls to learn nothing.
+    """
+    nodes = {
+        f"attempt_{index}": {
+            "skill": "list_directory", "state": "failed",
+            "input": {"path": "."},
+            "result": {"error": "PermissionError: local file skills require S17_SANDBOX_ROOT"},
+        }
+        for index in range(3)
+    }
+    planner = GeneralAgentPlanner(
+        Replies(), default_registry(), goal="list the local documents",
+        review_terminal=False, max_repeat_failures=3,
+    )
+
+    patch = await planner.plan(snapshot(nodes), Event(9, "task_failed", "attempt_2",
+                                                     {"error": "PermissionError: local file skills require S17_SANDBOX_ROOT"}))
+
+    assert patch.finish is True
+    assert "list_directory" in patch.reason
+    assert "3 times" in patch.reason

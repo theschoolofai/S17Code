@@ -189,3 +189,37 @@ def test_a_verification_command_may_be_repeated_because_the_world_changed() -> N
     assert "run_command" in rerunnable
     assert "read_code" in rerunnable          # a file re-read after an edit differs
     assert "web_search" not in rerunnable     # same query, same answer: still deduped
+
+
+# ---------------------------------------------------- the worker's own result
+#
+# `run_command` is the judge: it decides whether a change worked. The tests
+# above prove the *runner* is bounded, and the loop-control tests prove the
+# planner stops when a command keeps failing — but both read a result dict they
+# built by hand, so nothing exercised the worker that produces it.
+
+@pytest.mark.asyncio
+async def test_the_verification_result_can_actually_be_journalled(repo: Workspace, monkeypatch):
+    """The graph journal is JSON on disk, so a worker must return JSON.
+
+    Returning the CommandResult dataclass makes every run_command node fail with
+    `TypeError: Object of type CommandResult is not JSON serializable` before its
+    exit code is ever looked at. Observed on a real run: eleven verification
+    nodes, every one failed, no test result ever reached the graph.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from s17code.core.live_graph import TaskSpec
+    from s17code.workers.coding import run_command_worker
+
+    monkeypatch.setenv("S17_WORKSPACE", str(repo.root))
+    ctx = SimpleNamespace(workspace=lambda: repo)
+    result = await run_command_worker(
+        ctx, TaskSpec("verify_1", "run_command", {"command": "python --version"}))
+
+    json.dumps(result)                      # exactly what GraphStore._save does
+    assert result["exit_code"] == 0
+    # The planner's anti-thrash check reads this key straight off the stored
+    # result, so a non-dict result silently disables that ceiling too.
+    assert result["ok"] is True
